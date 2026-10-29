@@ -8,11 +8,13 @@
 
 services:
   omniroute:
-    image: node:22-alpine
-    # Version is PINNED: 3.8.52 removed `serve --port/--host` (bind via
-    # OMNIROUTE_SERVER_HOST, port via PORT), and an unpinned install drifts
-    # between boots because npm runs on every container start.
-    command: sh -c "npm install -g omniroute@3.8.52 && omniroute serve"
+    # Baked image (Dockerfile.omniroute, omniroute pinned to 3.8.52): npm no
+    # longer runs on every boot. 3.8.52 removed `serve --port/--host` — bind via
+    # OMNIROUTE_SERVER_HOST, port via PORT (below).
+    build:
+      context: .
+      dockerfile: Dockerfile.omniroute
+    image: rigging/omniroute:3.8.52
     ports:
       - "20128:20128"
     environment:

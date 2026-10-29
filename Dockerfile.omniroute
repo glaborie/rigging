@@ -1,8 +1,12 @@
+# Baked OmniRoute image: kills the 2-3-minute `npm install` on every container
+# start (cold start ~5s). Version is PINNED — 3.8.52 removed `serve --port/--host`;
+# bind address comes from OMNIROUTE_SERVER_HOST and the port from PORT (env).
 FROM node:22-alpine AS install
-RUN npm install --global omniroute
+RUN npm install --global omniroute@3.8.52
 
 FROM node:22-alpine
 COPY --from=install /usr/local/lib/node_modules /usr/local/lib/node_modules
-ENV PATH="/usr/local/lib/node_modules/omniroute/node_modules/.bin:/usr/local/bin:$PATH"
+RUN ln -s /usr/local/lib/node_modules/omniroute/bin/omniroute.mjs /usr/local/bin/omniroute
+ENV PATH="/usr/local/bin:${PATH}"
 EXPOSE 20128
-CMD ["node", "/usr/local/lib/node_modules/omniroute/bin/omniroute.mjs", "serve", "--port", "20128"]
+CMD ["omniroute", "serve"]
