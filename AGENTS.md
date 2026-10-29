@@ -108,10 +108,11 @@ text claims something the code does not do.
 
 ## Where to start
 
-`docs/milestones.md` → the first unticked box. Right now that is the v0.1 exit
-criterion: run `examples/hello/agent.yaml` against a live gateway and fix whatever
-the wire format disagrees about. Record the transcript under `examples/` when it
-works.
+`docs/milestones.md` → the first unticked box. v0.1 is **done** (2026-10-29: live
+end-to-end runs through OmniRoute -> freellmapi -> codestral and beam:cloud, two-tool
+task complete, 30 tests green). v0.2 is next: skills + progressive disclosure, the
+`chat` REPL, sessions, and JSONL export + `--replay`. Do not start v0.3 work
+(guardrails, retrieval, the b2b-support demo) before v0.2 is shippable.
 
 ## Things that will tempt you and are wrong here
 

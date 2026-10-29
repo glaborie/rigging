@@ -67,7 +67,13 @@ def _instantiate_guardrail(obj: Any, config: dict[str, Any]) -> Any:
 
 def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any = None,
              prices: PriceTable | None = None) -> Assembled:
-    registry = registry or DEFAULT_REGISTRY
+    if registry is None:
+        # The default registry is populated by the built-in capability packs at
+        # import; third-party entry points are discovered separately (ADR-0003).
+        import rigging.guardrails
+        import rigging.retriever
+        import rigging.tools.core  # noqa: F401
+        registry = DEFAULT_REGISTRY
 
     if client is None:
         from rigging.client.openai_compat import OpenAICompatClient

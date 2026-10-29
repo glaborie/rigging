@@ -20,15 +20,17 @@ interfaces and docs.
 - [x] `cli.py`: `harness run`, `harness schema`; streaming to terminal
 - [x] tests: SSE wire fixtures (chunk reassembly, tool-call deltas, malformed, 429), loop unit tests with a fake client
 
-**Exit criteria — mostly met (2026-10-29):** a live run through the full stack
-(harness loop -> OmniRoute -> freellmapi -> codestral) completed end-to-end with
-the full event trail in SQLite; transcript committed at
-`examples/hello/transcript-codestral.jsonl`. Still open: a run against
-`qwen3:8b` (needs `ollama pull qwen3:8b`) and a *two-tool* task — the tools
-themselves are the remaining v0.1/v0.3 work. Malformed-SSE handling is covered by
-`tests/test_client.py`.
+**Exit criteria — v0.1 DONE (2026-10-29):** live runs through the full stack
+(harness loop -> OmniRoute -> freellmapi -> codestral, and `beam:cloud` via ollama
+cloud) completed end-to-end with the full event trail in SQLite; the **two-tool
+task** (`examples/two-tools/`, `current_time` + `sha256_hex`) completed in 4 steps
+with both tools called and a verifiable digest. Transcript:
+`examples/hello/transcript-codestral.jsonl`; malformed-SSE covered by
+`tests/test_client.py`; core tools covered by `tests/test_core_tools.py`.
+Remaining nice-to-have, not gating: a run against a pulled `qwen3:8b`
+(`ollama pull qwen3:8b`).
 
-## v0.2 — knowledge and memory  ⇒ GO PUBLIC HERE
+## v0.2 — knowledge and memory  ⇒ GO PUBLIC HERE  ← NEXT
 
 - [ ] `skills.py`: filesystem discovery, frontmatter parsing, index-only system prompt
 - [ ] `tools/builtin.py`: `load_skill`, `escalate_to_human`

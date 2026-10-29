@@ -1,0 +1,15 @@
+# v0.1 exit criterion: a task that requires TWO tools, end to end.
+# Run: make run MANIFEST=examples/two-tools/agent.yaml \
+#        PROMPT="What time is it in Zurich? Then give me the SHA-256 of today's date in YYYY-MM-DD."
+name: two-tools
+model: beam:cloud
+credential_profile: ollama
+system_prompt: >
+  You are a precise assistant. Use the provided tools instead of computing or
+  guessing. Call them one at a time and report both results plainly.
+tools:
+  - current_time
+  - sha256_hex
+limits:
+  max_steps: 6
+  max_tokens: 8000
