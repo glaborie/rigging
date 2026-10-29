@@ -83,7 +83,7 @@ observability: ## gateway + Qdrant + Langfuse (:3000) + Postgres (v0.4 traces)
 
 hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples/hello/)
 	RIGGING_BASE_URL=$${RIGGING_BASE_URL:-http://localhost:20128/v1} \
-	uv run harness run $(MANIFEST) "$(PROMPT)" --model $(MODEL)
+	uv run harness run $(MANIFEST) "$(PROMPT)" --model $(if $(MODEL),$(MODEL),$(HELLO_MODEL))
 
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
