@@ -103,7 +103,7 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         # import; third-party entry points are discovered separately (ADR-0003).
         import rigging.guardrails
         import rigging.retriever
-        import rigging.tools.core  # noqa: F401
+        import rigging.tools.core
         if any(n in ("lookup_order", "check_pricing", "refund_order") for n in spec.tools):
             import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY

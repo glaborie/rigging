@@ -7,8 +7,8 @@ Anything not yet built says so and exits 2 — it never pretends.
 from __future__ import annotations
 
 import argparse
-import pathlib
 import json
+import pathlib
 import sys
 import time
 from typing import Any
@@ -132,7 +132,6 @@ def cmd_index(args: argparse.Namespace) -> int:
     import sqlite3 as _sq
 
     from rigging.manifest import load_manifest
-    from rigging.retriever.qdrant import _embed
     from rigging.types import Chunk
 
     spec = load_manifest(args.manifest)

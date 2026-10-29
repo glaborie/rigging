@@ -6,8 +6,6 @@ import datetime as dt
 import sqlite3
 from pathlib import Path
 
-import yaml
-
 from rigging.guardrails.refund_window import RefundWindowGuardrail
 from rigging.protocols import Allow, Deny
 from rigging.types import ToolCall
