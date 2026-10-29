@@ -100,6 +100,9 @@ eval: ## run an eval suite over the event log (v0.4)
 
 up: gateway ## alias for `make gateway`
 
+runs: ## list agent runs from the event log (make runs RUN=<id> drills in)
+	uv run harness runs $(if $(RUN),--run $(RUN),)
+
 logs: ## follow compose logs
 	docker compose logs -f --tail=50
 
