@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "rigging"
-version = "0.3.0"
+version = "0.4.0"
 description = "A modular agent harness: capabilities declared in a manifest, resolved through a registry."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -27,7 +27,7 @@ dependencies = [
 [project.optional-dependencies]
 qdrant = ["qdrant-client>=1.10"]
 langfuse = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=1.25"]
-mcp = ["mcp>=1.0"]
+mcp = ["mcp>=2.0"]
 laya = ["laya>=0.3", "torch>=2.4", "transformers>=4.44"]
 service = ["fastapi>=0.111", "uvicorn>=0.30"]
 dev = ["pytest>=8.2", "pytest-httpx>=0.30", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10", "jsonschema>=4.22"]

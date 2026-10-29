@@ -3,12 +3,10 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-10-29):** v0.1–v0.3 are shipped; v0.4 is in progress. Done:
-observability/eval slice (Langfuse trace verified; B2B golden eval 8/8), the
-FreeLLMAPI Clef-Flash adapter (contract-tested; live classification blocked by
-Cloudflare's exhausted daily free quota), and the decision dataset + calibration
-scorer with `harness calibrate`. Remaining: the MCP tool source. No v0.4
-release/tag is recorded yet.
+**Current state (2026-10-29):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
+Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
+is complete; a live Clef-Flash classification run is the only pending evidence and
+waits on Cloudflare's daily free quota reset. v0.5 is next.
 
 ## v0.1 — the loop is real
 
@@ -78,11 +76,13 @@ The repo stays **private** for now by decision; flipping it public is the remain
 - [x] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
 - [x] decision dataset (`tests/data/decisions.jsonl`, 40 labelled cases) + `rigging/decide/calibrate.py` scorer + `harness calibrate` CLI; deterministic safety checks stay authoritative. Live scoring of Clef-Flash pending the Cloudflare quota reset
 - [x] FreeLLMAPI adapter for `@cf/cloudflare/clef-flash` via `/v1/decisions`; contract tests pass. Live request reached Cloudflare but returned HTTP 429 (daily free quota exhausted), so successful live classification is pending
-- [ ] MCP tool source behind `[mcp]`, namespaced tools
+- [x] MCP tool source behind `[mcp]`, namespaced tools; live stdio echo-server round trip verified (mcp>=2.0)
 - [x] 6–8 golden eval cases for the demo agent; live B2B suite passed 8/8
 
-**v0.4 status:** implementation is incomplete until the decision dataset/scorer and MCP
-source are finished; no v0.4 release/tag has been cut.
+**v0.4 status: DONE (2026-10-29).** All boxes ticked; `harness calibrate` can be re-run
+against `@cf/cloudflare/clef-flash` once Cloudflare's daily free quota resets, which
+supplies the pending live-classification evidence. Version bumped to 0.4.0 at the
+same commit.
 
 ## v0.5 — the professional finish
 

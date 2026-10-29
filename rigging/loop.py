@@ -114,8 +114,15 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         client = OpenAICompatClient(settings.base_url, settings.api_key, timeout=settings.request_timeout_s)
 
     fabricated = {"escalate_to_human", "search_policies", "load_skill"}
-    registry_tools = [n for n in spec.tools if n not in fabricated]
+    mcp_prefixes = tuple(f"{s.name}__" for s in spec.mcp_servers)
+    mcp_names = [n for n in spec.tools if n.startswith(mcp_prefixes)]
+    registry_tools = [n for n in spec.tools if n not in fabricated and n not in mcp_names]
     tools: list[Any] = [_coerce_tool(obj) for obj in registry.resolve_all("tool", registry_tools)]
+
+    if spec.mcp_servers:
+        from rigging.mcp import collect
+
+        tools.extend(collect(spec.mcp_servers, allow=mcp_names or None))
 
     guardrails: dict[str, list[Any]] = {"on_input": [], "on_tool_call": [], "on_tool_result": [], "on_output": []}
     for hook in guardrails:
