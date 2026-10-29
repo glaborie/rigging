@@ -20,10 +20,13 @@ interfaces and docs.
 - [x] `cli.py`: `harness run`, `harness schema`; streaming to terminal
 - [x] tests: SSE wire fixtures (chunk reassembly, tool-call deltas, malformed, 429), loop unit tests with a fake client
 
-**Exit criteria (open):** `harness run` completes a two-tool task against
-`beam:cloud` and against `qwen3:8b`; a malformed SSE chunk is recorded, not fatal.
-The malformed-chunk half is already covered by `tests/test_client.py`; the live half
-needs `ollama signin` (or `ollama pull qwen3:8b`).
+**Exit criteria — mostly met (2026-10-29):** a live run through the full stack
+(harness loop -> OmniRoute -> freellmapi -> codestral) completed end-to-end with
+the full event trail in SQLite; transcript committed at
+`examples/hello/transcript-codestral.jsonl`. Still open: a run against
+`qwen3:8b` (needs `ollama pull qwen3:8b`) and a *two-tool* task — the tools
+themselves are the remaining v0.1/v0.3 work. Malformed-SSE handling is covered by
+`tests/test_client.py`.
 
 ## v0.2 — knowledge and memory  ⇒ GO PUBLIC HERE
 

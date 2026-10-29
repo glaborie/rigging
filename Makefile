@@ -18,6 +18,7 @@ SHELL := /bin/bash
 MANIFEST ?= examples/hello/agent.yaml
 PROMPT   ?= say hello in one sentence
 MODEL    ?=
+HELLO_MODEL ?= freellm/codestral   # proven live through OmniRoute -> freellmapi
 DB       ?=
 APPROVE  ?= 0
 
@@ -80,8 +81,9 @@ observability: ## gateway + Qdrant + Langfuse (:3000) + Postgres (v0.4 traces)
 	docker compose --profile retrieval --profile observability up -d
 	@printf 'langfuse: http://localhost:3000  (create an account, then set RIGGING_OTLP_* in .env)\n'
 
-hello: ## v0.1 smoke test: one prompt, no tools
-	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),)
+hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples/hello/)
+	RIGGING_BASE_URL=$${RIGGING_BASE_URL:-http://localhost:20128/v1} \
+	uv run harness run $(MANIFEST) "$(PROMPT)" --model $(MODEL)
 
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \

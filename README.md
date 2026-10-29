@@ -61,8 +61,12 @@ ollama pull qwen3:8b
 # 2. Install
 uv sync
 
-# 3. Run an agent
-uv run harness run examples/b2b-support/agent.yaml "what is the return window on SKU-1043?"
+# 3. Run an agent (v0.1: the no-tools smoke agent)
+uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --model freellm/codestral
+
+# The b2b-support agent (5 tools, skills, retrieval, guardrails) lands in v0.3 —
+# its manifest is final but its tools are not implemented yet, so assembly
+# correctly fails fast. See docs/milestones.md.
 ```
 
 No API key is required for either path. The gateway is OpenAI-compatible HTTP,

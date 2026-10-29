@@ -1,0 +1,9 @@
+{"type": "run", "run": {"run_id": "r_8979824fa7f6", "session_id": "s_15dfe3e5a8d1", "started_at": 1793279198.7625303, "finished_at": 1793279200.1008782, "status": "ok", "spec_hash": "171ffbf66fb5a820", "model": "freellm/codestral", "parent_run_id": null}}
+{"seq": 1, "ts": 1793279198.7843597, "type": "run_started", "payload": {"model": "freellm/codestral", "spec_hash": "171ffbf66fb5a820"}, "span_id": null}
+{"seq": 2, "ts": 1793279198.805206, "type": "guardrail_verdict", "payload": {"hook": "on_input", "checks": []}, "span_id": null}
+{"seq": 3, "ts": 1793279198.825765, "type": "input_received", "payload": {"content": "Say hello in one sentence."}, "span_id": null}
+{"seq": 4, "ts": 1793279198.8471029, "type": "budget_check", "payload": {"step": 1, "usage": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0, "reasoning_tokens": 0}, "blocked": null}, "span_id": null}
+{"seq": 5, "ts": 1793279198.869046, "type": "model_request", "payload": {"model": "freellm/codestral", "messages": 2, "tools": []}, "span_id": null}
+{"seq": 6, "ts": 1793279200.029432, "type": "model_response", "payload": {"content": "Hello, how can I assist you today?", "reasoning": null, "tool_calls": [], "usage": {"input_tokens": 22, "output_tokens": 10, "cached_tokens": 0, "reasoning_tokens": 0}, "finish_reason": "stop"}, "span_id": null}
+{"seq": 7, "ts": 1793279200.053329, "type": "output_verdict", "payload": {"checks": []}, "span_id": null}
+{"seq": 8, "ts": 1793279200.075096, "type": "run_finished", "payload": {"status": "ok", "content_chars": 34}, "span_id": null}
