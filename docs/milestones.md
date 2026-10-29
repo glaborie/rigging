@@ -76,13 +76,14 @@ The repo stays **private** for now by decision; flipping it public is the remain
 - [x] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
 - [x] decision dataset (`tests/data/decisions.jsonl`, 40 labelled cases) + `rigging/decide/calibrate.py` scorer + `harness calibrate` CLI; deterministic safety checks stay authoritative. Live scoring of Clef-Flash pending the Cloudflare quota reset
 - [x] FreeLLMAPI adapter for `@cf/cloudflare/clef-flash` via `/v1/decisions`; contract tests pass. Live request reached Cloudflare but returned HTTP 429 (daily free quota exhausted), so successful live classification is pending
+- [x] OpenRouter adapter for `respan/span-01-lite:free` via `/api/v1/systemone`; Span-01 accepts only `noul` questions, so choice questions fan out to one noul per option and renormalise. **Live calibration: n=42, accuracy=0.833, Brier=0.269**
 - [x] MCP tool source behind `[mcp]`, namespaced tools; live stdio echo-server round trip verified (mcp>=2.0)
 - [x] 6–8 golden eval cases for the demo agent; live B2B suite passed 8/8
 
-**v0.4 status: DONE (2026-10-29).** All boxes ticked; `harness calibrate` can be re-run
-against `@cf/cloudflare/clef-flash` once Cloudflare's daily free quota resets, which
-supplies the pending live-classification evidence. Version bumped to 0.4.0 at the
-same commit.
+**v0.4 status: DONE (2026-10-29).** All boxes ticked. Live calibration evidence came
+from `respan/span-01-lite:free` on OpenRouter (n=42, accuracy 0.833, Brier 0.269);
+`@cf/cloudflare/clef-flash` still waits on its daily cloud quota for the same run.
+Version bumped to 0.4.0.
 
 ## v0.5 — the professional finish
 

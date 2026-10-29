@@ -62,6 +62,10 @@ def _parser() -> argparse.ArgumentParser:
     cal = sub.add_parser("calibrate", help="score a decision model against the labelled dataset")
     cal.add_argument("model", help="registered decision_model name (e.g. @cf/cloudflare/clef-flash)")
     cal.add_argument("--dataset", default="tests/data/decisions.jsonl", help="labelled JSONL dataset")
+    cal.add_argument("--min-interval", type=float, default=0.0,
+                     help="minimum seconds between decision requests (pace free tiers)")
+    cal.add_argument("--retries", type=int, default=0,
+                     help="how many times to retry an HTTP 429 before giving up")
 
     chat = sub.add_parser("chat", help="interactive REPL: one session, many runs")
     chat.add_argument("manifest")
@@ -233,7 +237,12 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
         raise SystemExit(2) from exc
 
     cases = calib.load_dataset(args.dataset)
-    report = calib.score(instance, cases)
+    report = calib.score(
+        instance,
+        cases,
+        min_interval=args.min_interval,
+        max_retries=args.retries,
+    )
     close = getattr(instance, "close", None)
     if close is not None:
         close()

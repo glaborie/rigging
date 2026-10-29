@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import json
 import pathlib
+import time
 from dataclasses import dataclass
 from typing import Protocol
 
+from rigging.errors import TransportError
 from rigging.protocols import DecisionAnswer
+
+_BACKOFF_S = 10.0
 
 
 class _DecisionModel(Protocol):
@@ -64,16 +68,38 @@ def load_dataset(path: str | pathlib.Path) -> list[DecisionCase]:
     return cases
 
 
-def score(model: _DecisionModel, dataset: list[DecisionCase]) -> CalibrationReport:
-    """Ask the model every case's question and measure accuracy + Brier score."""
+def score(
+    model: _DecisionModel,
+    dataset: list[DecisionCase],
+    *,
+    min_interval: float = 0.0,
+    max_retries: int = 0,
+) -> CalibrationReport:
+    """Ask the model every case's question and measure accuracy + Brier score.
+
+    `min_interval` paces requests (free tiers are rate-limited per minute) and
+    `max_retries` retries HTTP 429 with a fixed backoff before giving up.
+    """
     if not dataset:
         raise ValueError("dataset is empty")
     correct = 0
     brier_sum = 0.0
+    last_send = 0.0
     for case in dataset:
         if case.label not in case.options:
             raise ValueError(f"case {case.id!r}: label {case.label!r} is not one of its options")
-        answers = model.decide(case.state, {case.question: list(case.options)})
+        for attempt in range(max_retries + 1):
+            wait = min_interval - (time.monotonic() - last_send)
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                answers = model.decide(case.state, {case.question: list(case.options)})
+                last_send = time.monotonic()
+                break
+            except TransportError as exc:
+                if exc.status != 429 or attempt == max_retries:
+                    raise
+                time.sleep(_BACKOFF_S)
         answer = answers.get(case.question)
         if answer is None:
             raise ValueError(f"case {case.id!r}: model returned no answer for {case.question!r}")

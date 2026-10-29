@@ -6,65 +6,71 @@ import httpx
 import pytest
 
 from rigging.decide.openrouter import OpenRouterSpan01Lite
-from rigging.errors import TransportError
+from rigging.errors import RiggingError, TransportError
 
 QUESTION = "Which kind of model should answer this?"
 STATE = "my react useEffect runs twice, why?"
 OPTIONS = ["chat", "code", "reasoning", "writing"]
 
 
-def test_openrouter_posts_systemone_payload_and_maps_probabilities() -> None:
+def _noul_response(nouls: dict[str, float]) -> dict[str, object]:
+    return {
+        "id": "gen-dec-1",
+        "model": "respan/span-01-lite-20260925",
+        "provider": "Respan",
+        "answers": {qid: {"type": "noul", "noul": p} for qid, p in nouls.items()},
+        "usage": {"input_tokens": 42, "output_tokens": 0, "cost": 0},
+    }
+
+
+def test_openrouter_fans_choice_out_to_noul_and_renormalises() -> None:
     captured: dict[str, object] = {}
 
     def respond(request: httpx.Request) -> httpx.Response:
         captured["url"] = str(request.url)
         captured["auth"] = request.headers.get("authorization")
         captured["body"] = json.loads(request.content)
-        return httpx.Response(
-            200,
-            json={
-                "id": "gen-dec-1",
-                "model": "respan/span-01-lite",
-                "provider": "Respan",
-                "result": {
-                    "answers": {
-                        "q0": {
-                            "type": "choice",
-                            "choice": "code",
-                            "confidence": 0.88,
-                            "probabilities": {
-                                "chat": 0.03,
-                                "code": 0.88,
-                                "reasoning": 0.05,
-                                "writing": 0.04,
-                            },
-                        }
-                    }
-                },
-                "usage": {"input_tokens": 42, "output_tokens": 0},
-            },
-        )
+        return httpx.Response(200, json=_noul_response({
+            "q0__0": 0.10,
+            "q0__1": 0.70,
+            "q0__2": 0.15,
+            "q0__3": 0.05,
+        }))
 
     client = httpx.Client(transport=httpx.MockTransport(respond))
     model = OpenRouterSpan01Lite(api_key="test-api-key", client=client)
     answer = model.decide(STATE, {QUESTION: OPTIONS})
 
-    assert captured["url"] == "https://openrouter.ai/api/v1/systemone"
-    assert captured["auth"] == "Bearer test-api-key"
-    assert captured["body"] == {
-        "model": "respan/span-01-lite:free",
-        "state": STATE,
-        "questions": {
-            "q0": {
-                "type": "choice",
-                "instructions": QUESTION,
-                "criteria": {option: option for option in OPTIONS},
-            }
+    body = captured["body"]
+    assert body["model"] == "respan/span-01-lite:free"
+    assert body["state"] == STATE
+    # one noul question per option, no criteria key
+    assert body["questions"] == {
+        "q0__0": {
+            "type": "noul",
+            "instructions": f"For the question '{QUESTION}', the correct answer is chat.",
+        },
+        "q0__1": {
+            "type": "noul",
+            "instructions": f"For the question '{QUESTION}', the correct answer is code.",
+        },
+        "q0__2": {
+            "type": "noul",
+            "instructions": f"For the question '{QUESTION}', the correct answer is reasoning.",
+        },
+        "q0__3": {
+            "type": "noul",
+            "instructions": f"For the question '{QUESTION}', the correct answer is writing.",
         },
     }
+    assert captured["url"] == "https://openrouter.ai/api/v1/systemone"
+    assert captured["auth"] == "Bearer test-api-key"
+
     assert answer[QUESTION].choice == "code"
-    assert answer[QUESTION].probability == 0.88
-    assert answer[QUESTION].distribution["chat"] == 0.03
+    total = 0.10 + 0.70 + 0.15 + 0.05
+    assert answer[QUESTION].probability == pytest.approx(0.70 / total)
+    assert answer[QUESTION].distribution["chat"] == pytest.approx(0.10 / total)
+    assert abs(sum(answer[QUESTION].distribution.values()) - 1.0) < 1e-9
     client.close()
 
 
@@ -97,29 +103,28 @@ def test_openrouter_turns_rate_limit_into_transport_error() -> None:
     client.close()
 
 
-def test_openrouter_rejects_unknown_choice_and_missing_probabilities() -> None:
-    def respond(request: httpx.Request) -> httpx.Response:
-        body = json.loads(request.content)
-        answer = {"type": "choice", "choice": "banana", "probabilities": {"chat": 1.0}}
-        if "banana" in json.dumps(body):
-            pass  # first call: unknown choice
-        return httpx.Response(
-            200,
-            json={"result": {"answers": {"q0": dict(answer)}}},
+def test_openrouter_rejects_missing_noul_and_all_zero_scores() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json={"answers": {"q0__0": {"type": "noul", "noul": 0.4}}},
+            )
         )
-
-    client = httpx.Client(transport=httpx.MockTransport(respond))
+    )
     model = OpenRouterSpan01Lite(api_key="test-api-key", client=client)
-    with pytest.raises(Exception, match="unknown choice"):
-        model.decide(STATE, {QUESTION: OPTIONS})
+    with pytest.raises(RiggingError, match="missing answer q0__1"):
+        model.decide("state", {"pick": ["a", "b"]})
 
-    def respond_missing(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(
-            200,
-            json={"result": {"answers": {"q0": {"type": "choice", "choice": "code"}}}},
+    zero = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda _request: httpx.Response(
+                200,
+                json=_noul_response({"q0__0": 0.0, "q0__1": 0.0}),
+            )
         )
-
-    model._client = httpx.Client(transport=httpx.MockTransport(respond_missing))
-    with pytest.raises(Exception, match="missing probabilities"):
-        model.decide(STATE, {QUESTION: OPTIONS})
+    )
+    model._client = zero
+    with pytest.raises(RiggingError, match="all-zero"):
+        model.decide("state", {"pick": ["a", "b"]})
     client.close()
