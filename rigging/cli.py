@@ -59,6 +59,10 @@ def _parser() -> argparse.ArgumentParser:
     idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
     idx.add_argument("manifest")
 
+    cal = sub.add_parser("calibrate", help="score a decision model against the labelled dataset")
+    cal.add_argument("model", help="registered decision_model name (e.g. @cf/cloudflare/clef-flash)")
+    cal.add_argument("--dataset", default="tests/data/decisions.jsonl", help="labelled JSONL dataset")
+
     chat = sub.add_parser("chat", help="interactive REPL: one session, many runs")
     chat.add_argument("manifest")
     chat.add_argument("--db", default=None)
@@ -209,6 +213,34 @@ def cmd_schema(_args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_calibrate(args: argparse.Namespace) -> int:
+    import sys as _sys
+
+    from rigging.decide import calibrate as calib  # package init registers decision models
+
+    if args.model not in DEFAULT_REGISTRY.names("decision_model"):
+        print(
+            f"unknown decision model: {args.model} "
+            f"(registered: {', '.join(DEFAULT_REGISTRY.names('decision_model'))})",
+            file=_sys.stderr,
+        )
+        raise SystemExit(2)
+    model = DEFAULT_REGISTRY.get("decision_model", args.model)
+    try:
+        instance = model()
+    except (ValueError, TypeError) as exc:
+        print(f"cannot start {args.model}: {exc}", file=_sys.stderr)
+        raise SystemExit(2) from exc
+
+    cases = calib.load_dataset(args.dataset)
+    report = calib.score(instance, cases)
+    close = getattr(instance, "close", None)
+    if close is not None:
+        close()
+    print(report.render())
+    return 0
+
+
 def cmd_tools(args: argparse.Namespace) -> int:
     import rigging.decide
     import rigging.guardrails
@@ -228,7 +260,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate}[args.command]
     return handler(args)
 
 

@@ -3,13 +3,12 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-10-29):** v0.1–v0.3 are shipped; v0.4 is in progress. The
-v0.4 observability/eval slice is implemented and verified (Langfuse trace; B2B
-golden eval 8/8). The FreeLLMAPI Clef-Flash adapter is implemented and contract-
-tested; its live smoke reached Cloudflare but hit the exhausted daily free quota
-(HTTP 429), so a successful live classification remains pending. MCP integration
-and the decision dataset/scoring harness are not complete. No v0.4 release/tag is
-recorded.
+**Current state (2026-10-29):** v0.1–v0.3 are shipped; v0.4 is in progress. Done:
+observability/eval slice (Langfuse trace verified; B2B golden eval 8/8), the
+FreeLLMAPI Clef-Flash adapter (contract-tested; live classification blocked by
+Cloudflare's exhausted daily free quota), and the decision dataset + calibration
+scorer with `harness calibrate`. Remaining: the MCP tool source. No v0.4
+release/tag is recorded yet.
 
 ## v0.1 — the loop is real
 
@@ -77,7 +76,7 @@ The repo stays **private** for now by decision; flipping it public is the remain
 
 - [x] `Exporter` + OTel `gen_ai.*` spans, OTLP → Langfuse behind `[langfuse]`; live nested trace verified
 - [x] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
-- [ ] decision dataset (~40 labelled cases) + scoring harness for calibration; keep the deterministic safety checks authoritative
+- [x] decision dataset (`tests/data/decisions.jsonl`, 40 labelled cases) + `rigging/decide/calibrate.py` scorer + `harness calibrate` CLI; deterministic safety checks stay authoritative. Live scoring of Clef-Flash pending the Cloudflare quota reset
 - [x] FreeLLMAPI adapter for `@cf/cloudflare/clef-flash` via `/v1/decisions`; contract tests pass. Live request reached Cloudflare but returned HTTP 429 (daily free quota exhausted), so successful live classification is pending
 - [ ] MCP tool source behind `[mcp]`, namespaced tools
 - [x] 6–8 golden eval cases for the demo agent; live B2B suite passed 8/8
