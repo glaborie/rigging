@@ -9,10 +9,18 @@
 services:
   omniroute:
     image: node:22-alpine
-    command: sh -c "npm install -g omniroute && omniroute serve --port 20128 --host 0.0.0.0"
+    # Version is PINNED: 3.8.52 removed `serve --port/--host` (bind via
+    # OMNIROUTE_SERVER_HOST, port via PORT), and an unpinned install drifts
+    # between boots because npm runs on every container start.
+    command: sh -c "npm install -g omniroute@3.8.52 && omniroute serve"
     ports:
       - "20128:20128"
     environment:
+      PORT: "20128"
+      OMNIROUTE_SERVER_HOST: 0.0.0.0
+      # Bootstrap dashboard password, seeded on FIRST boot only. Change it in
+      # Dashboard -> Settings -> Security afterwards; later restarts ignore it.
+      INITIAL_PASSWORD: ${OMNIROUTE_INITIAL_PASSWORD:-CHANGEME}
       OMNIROUTE_SELF_HOSTED_PROVIDERS: |
         providers:
           - id: ollama
