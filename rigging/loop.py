@@ -150,7 +150,8 @@ def _apply_transform(hook: str, current: list[Any], value: Any) -> list[Any]:
 def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None, client: Any = None,
               log: EventLog | None = None, session_id: str | None = None,
               stream: Callable[[ModelDelta], None] | None = None,
-              approval: Any = None, prices: PriceTable | None = None) -> RunResult:
+              approval: Any = None, prices: PriceTable | None = None,
+              history: list[Message] | None = None) -> RunResult:
     agent = assemble(spec, registry=registry, client=client, prices=prices)
     if approval is not None:
         agent.approval = approval
@@ -165,9 +166,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         index = agent.skills.index_block(spec.skills)
         system = f"{system}\n\n{index}".strip()
 
-    messages: list[Message] = []
-    if system:
-        messages.append(Message(role="system", content=system))
+    messages: list[Message] = list(history or [])
+    if not any(m.role == "system" for m in messages) and system:
+        messages.insert(0, Message(role="system", content=system))
 
     verdict, notes = _apply("on_input", agent.guardrails["on_input"], [Message(role="user", content=prompt)])
     log.append(run_id, "guardrail_verdict", {"hook": "on_input", "checks": notes})
@@ -240,9 +241,11 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     log.finish_run(run_id, "ok")
     if owns_log:
         log.close()
-    return RunResult(run_id=run_id, status="ok", output=output, usage=usage,
-                     steps=step if not exhausted else spec.limits.max_steps,
-                     cost_usd=agent.prices.cost(spec.model, usage))
+    result = RunResult(run_id=run_id, status="ok", output=output, usage=usage,
+                       steps=step if not exhausted else spec.limits.max_steps,
+                       cost_usd=agent.prices.cost(spec.model, usage))
+    result.history = messages  # chat REPL only; excluded from --json
+    return result
 
 
 def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTable, step: int) -> str | None:

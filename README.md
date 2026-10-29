@@ -64,6 +64,12 @@ uv sync
 # 3. Run an agent (v0.1: the no-tools smoke agent)
 uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --model freellm/codestral
 
+# Interactive chat: one session, many runs, continuous memory
+uv run harness chat examples/hello/agent.yaml
+
+# Offline: replay a recorded transcript instead of calling the API
+uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
+
 # The b2b-support agent (5 tools, skills, retrieval, guardrails) lands in v0.3 —
 # its manifest is final but its tools are not implemented yet, so assembly
 # correctly fails fast. See docs/milestones.md.

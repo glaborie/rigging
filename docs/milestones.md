@@ -32,10 +32,10 @@ Remaining nice-to-have, not gating: a run against a pulled `qwen3:8b`
 
 ## v0.2 — knowledge and memory  ⇒ GO PUBLIC HERE  ← NEXT
 
-- [ ] `skills.py`: filesystem discovery, frontmatter parsing, index-only system prompt
-- [ ] `tools/builtin.py`: `load_skill`, `escalate_to_human`
-- [ ] sessions table, `harness chat` REPL (streaming, `/transcript`, `/escalate`)
-- [ ] JSONL export + `harness run --replay`
+- [x] `skills.py`: filesystem discovery, frontmatter parsing, index-only system prompt
+- [x] `tools/builtin.py`: `load_skill`, `escalate_to_human`
+- [x] sessions table, `harness chat` REPL (`/transcript`, `/escalate`; per-turn runs share one session). Verified live: two-turn run through the gateway recalled a codeword given in the first turn
+- [x] JSONL export + `harness run --replay`. Verified live: a recorded two-tool run replayed byte-identical with the API base at a dead port (tests: `tests/test_replay.py`)
 - [ ] README quickstart verified from a clean clone on Linux
 
 **Publish gate:** 5-minute zero-API-key quickstart · green CI on `main` · committed

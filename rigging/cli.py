@@ -19,7 +19,6 @@ from rigging.manifest import AgentSpec, load_manifest
 from rigging.registry import DEFAULT_REGISTRY
 
 NOT_YET = {
-    "chat": "v0.2",
     "index": "v0.3",
     "eval": "v0.4",
 }
@@ -39,6 +38,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--session", default=None, help="continue an existing session id")
     run.add_argument("--show-reasoning", action="store_true", help="stream reasoning deltas")
     run.add_argument("--yes", action="store_true", help="approve side-effecting tools (demo only)")
+    run.add_argument("--replay", metavar="JSONL", default=None,
+                     help="replay a recorded transcript instead of calling the API (offline)")
     run.add_argument("--json", action="store_true", help="print the RunResult as JSON")
 
     for name, version in NOT_YET.items():
@@ -49,6 +50,12 @@ def _parser() -> argparse.ArgumentParser:
     runs.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
     runs.add_argument("--run", default=None, help="show this run's full event trail")
     runs.add_argument("--limit", type=int, default=10)
+
+    chat = sub.add_parser("chat", help="interactive REPL: one session, many runs")
+    chat.add_argument("manifest")
+    chat.add_argument("--db", default=None)
+    chat.add_argument("--session", default=None, help="resume a session id")
+    chat.add_argument("--show-reasoning", action="store_true")
 
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
@@ -73,8 +80,17 @@ def cmd_run(args: argparse.Namespace) -> int:
             sys.stderr.flush()
 
     log = EventLog(args.db or settings.db_path)
-    result = run_agent(spec, args.prompt, log=log, session_id=args.session, stream=emit,
-                       approval=ScriptedApproval(True) if args.yes else None)
+    client = None
+    if args.replay:
+        from rigging.replay import ReplayClient
+
+        client = ReplayClient(args.replay)
+    # replay is offline and its transcript is already in the file; streaming a
+    # recording through the SSE reassembler would be theatre
+    result = run_agent(spec, args.prompt, log=log, session_id=args.session,
+                       stream=None if args.replay else emit,
+                       client=client,
+                       approval=ScriptedApproval(True) if args.yes or args.replay else None)
 
     if not args.json:
         print()
@@ -88,6 +104,22 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(result.model_dump(), indent=2, default=str))
     return 0 if result.status == "ok" else 1
+
+
+def cmd_chat(args: argparse.Namespace) -> int:
+    from rigging.chat import chat
+
+    spec = load_manifest(args.manifest)
+    log = EventLog(args.db or settings.db_path)
+
+    def emit(delta: Any) -> None:
+        if delta.text:
+            sys.stdout.write(delta.text)
+            sys.stdout.flush()
+        if args.show_reasoning and delta.reasoning:
+            sys.stderr.write(f"\033[2m{delta.reasoning}\033[0m")
+
+    return chat(spec, log=log, session_id=args.session, stream=emit)
 
 
 def cmd_runs(args: argparse.Namespace) -> int:
@@ -140,7 +172,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat}[args.command]
     return handler(args)
 
 

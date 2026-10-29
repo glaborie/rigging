@@ -147,3 +147,6 @@ class RunResult(BaseModel):
     steps: int = 0
     cost_usd: float | None = None
     error: str | None = None
+    # full message transcript after the run — for the chat REPL only; excluded
+    # from JSON so `--json` output stays a terminal record, not a transcript
+    history: list[Message] | None = Field(default=None, exclude=True)

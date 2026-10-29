@@ -89,8 +89,8 @@ run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT=
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
 
-chat: ## interactive REPL over a session (v0.2)
-	uv run harness chat $(if $(DB),--db $(DB),)
+chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
+	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),)
 
 index: ## (re)build the policy index (v0.3)
 	uv run harness index
