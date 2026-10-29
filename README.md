@@ -94,6 +94,8 @@ tests/            unit + SSE wire fixtures + replay integration
 
 ## Documentation
 
+- [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
+
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
 - [`docs/adr/`](docs/adr/) — 17 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
