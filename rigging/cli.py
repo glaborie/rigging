@@ -125,6 +125,7 @@ def cmd_schema(_args: argparse.Namespace) -> int:
 def cmd_tools(args: argparse.Namespace) -> int:
     import rigging.guardrails
     import rigging.retriever  # noqa: F401
+    import rigging.tools.core  # noqa: F401
 
     kinds = [args.kind] if args.kind else ["tool", "guardrail", "retriever", "decision_model", "approval_policy"]
     for kind in kinds:
