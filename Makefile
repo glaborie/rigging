@@ -65,6 +65,10 @@ format: ## ruff --fix
 typecheck: ## mypy --strict on the public surface
 	uv run mypy
 
+gateway-password: ## reset the OmniRoute dashboard login: make gateway-password PW=new-password
+	@scripts/omniroute-reset-password.sh "$(PW)" 2>/dev/null || \
+	 (chmod +x scripts/omniroute-reset-password.sh && scripts/omniroute-reset-password.sh "$(PW)")
+
 gateway: ## start OmniRoute (OpenAI-compatible, :20128)
 	docker compose up -d omniroute
 	@printf 'gateway: http://localhost:20128/v1  (model list: curl -s localhost:20128/v1/models)\n'
