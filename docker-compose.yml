@@ -21,16 +21,23 @@ services:
       # Bootstrap dashboard password, seeded on FIRST boot only. Change it in
       # Dashboard -> Settings -> Security afterwards; later restarts ignore it.
       INITIAL_PASSWORD: ${OMNIROUTE_INITIAL_PASSWORD:-CHANGEME}
+      # Self-hosted entry schema (docs: Self-Hosted OpenAI-Compatible Entry):
+      # kind: openai|anthropic|local, and `model` is REQUIRED — it is the default
+      # for unprefixed requests. Do NOT use the provider-node shape (type/apiType);
+      # that belongs to the dashboard config, and a config that fails to parse
+      # makes /v1/chat/completions return 500 instead of silently falling through.
+      # Route per request: model "freellm/<id>" or header x-omniroute-provider: freellm.
       OMNIROUTE_SELF_HOSTED_PROVIDERS: |
         providers:
+          - id: freellm
+            kind: openai
+            baseUrl: http://host.docker.internal:3001/v1
+            model: codestral
+            apiKey: ${FREELLM_API_KEY}
           - id: ollama
-            type: openai-compatible
-            apiType: chat
+            kind: openai
             baseUrl: http://host.docker.internal:11434/v1
-          - id: openrouter
-            type: openai-compatible
-            apiType: chat
-            baseUrl: https://openrouter.ai/api/v1
+            model: qwen3:8b
     volumes:
       - omniroute-data:/root/.omniroute
     extra_hosts:
