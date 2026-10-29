@@ -11,6 +11,7 @@ import rigging.tools.demo  # noqa: F401  (registration side-effect)
 from rigging.registry import DEFAULT_REGISTRY
 from rigging.testing import FakeClient
 from rigging.tools.schema import FunctionTool
+from rigging.types import ModelRequest
 
 
 @pytest.fixture()
@@ -92,11 +93,11 @@ def test_search_policies_finds_refund_window(demo_db):
 
 
 def test_escalation_yields_structured_handoff(tmp_path, demo_db):
-    import yaml
-
     from rigging.events import EventLog
     from rigging.loop import run_agent
     from rigging.manifest import load_manifest
+
+    import yaml
     d = tmp_path / "esc.yaml"
     d.write_text(yaml.safe_dump({"name": "esc", "model": "test", "system_prompt": "be terse",
                                  "tools": ["escalate_to_human"], "limits": {"max_steps": 3}}))

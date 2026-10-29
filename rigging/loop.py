@@ -51,9 +51,29 @@ class Assembled:
     approval: Any = None
     prices: PriceTable = field(default_factory=PriceTable.load)
     handoff: Any = None  # set when the model calls escalate_to_human
+    exporters: list[Any] = field(default_factory=list)
 
     def tool_map(self) -> dict[str, Any]:
         return {t.name: t for t in self.tools}
+
+
+def _span(agent: Assembled, name: str, attributes: dict[str, Any]) -> Any:
+    """Start a span on every exporter; a broken exporter must never break a run."""
+    spans = []
+    for exporter in agent.exporters:
+        try:
+            spans.append((exporter, exporter.start_span(name, attributes)))
+        except Exception:  # observability is not allowed to be a failure mode
+            continue
+    return spans
+
+
+def _end_span(agent: Assembled, spans: Any, attributes: dict[str, Any]) -> None:
+    for exporter, span in spans or []:
+        try:
+            exporter.end_span(span, attributes)
+        except Exception:
+            continue
 
 
 def _sub_env(value: Any) -> Any:
@@ -83,7 +103,7 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         # import; third-party entry points are discovered separately (ADR-0003).
         import rigging.guardrails
         import rigging.retriever
-        import rigging.tools.core
+        import rigging.tools.core  # noqa: F401
         if any(n in ("lookup_order", "check_pricing", "refund_order") for n in spec.tools):
             import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY
@@ -144,8 +164,20 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
                 if t.name == name:
                     t.side_effecting = True
 
+    exporters: list[Any] = []
+    for ref in spec.observability.exporters:
+        name, _, opts_raw = ref.partition(":")
+        opts = dict(kv.split("=", 1) for kv in opts_raw.split(",") if "=" in kv) if opts_raw else {}
+        from rigging.observability import EXPORTERS
+
+        factory = EXPORTERS.get(name.strip())
+        if factory is None:
+            raise CapabilityNotFound("exporter", [name], sorted(EXPORTERS))
+        exporters.append(factory(**opts))
+
     return Assembled(spec=spec, client=client, tools=tools, guardrails=guardrails,
-                     skills=skills, approval=approval, prices=prices or PriceTable.load())
+                     skills=skills, approval=approval, prices=prices or PriceTable.load(),
+                     exporters=exporters)
 
 
 # --------------------------------------------------------------------------- chain
@@ -214,6 +246,15 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     wire = [t.json_schema for t in agent.tools]
     usage = Usage()
     started = time.perf_counter()
+    root_span = _span(agent, "invoke_agent", {
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.system": agent.client.name if hasattr(agent.client, "name") else "openai",
+        "gen_ai.request.model": spec.model,
+        "gen_ai.agent.name": spec.name,
+        "session.id": session_id,
+        "rigging.run_id": run_id,
+        "rigging.spec_hash": spec.spec_hash,
+    })
     last: ModelResponse | None = None
     exhausted: str | None = None
 
@@ -224,12 +265,25 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             exhausted = reason
             break
 
+        call_span = _span(agent, "chat", {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": spec.model,
+            "gen_ai.request.max_tokens": spec.limits.max_tokens,
+            "rigging.step": step,
+        })
         request = ModelRequest(model=spec.model, messages=messages, tools=wire)
         log.append(run_id, "model_request", {"model": spec.model, "messages": len(messages), "tools": list(tools)})
         response = agent.client.complete(request) if stream is None else _streaming_call(agent, request, log, run_id, stream)
 
         usage = usage + response.usage
         last = response
+        _end_span(agent, call_span, {
+            "gen_ai.response.model": response.model or spec.model,
+            "gen_ai.usage.input_tokens": response.usage.input_tokens,
+            "gen_ai.usage.output_tokens": response.usage.output_tokens,
+            "gen_ai.response.finish_reason": response.finish_reason,
+            "rigging.tool_calls": len(response.tool_calls),
+        })
         log.append(run_id, "model_response", {
             "content": response.message.content,
             "reasoning": response.message.reasoning,
@@ -268,6 +322,13 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     if isinstance(out_verdict, Transform):
         output = out_verdict.value
 
+    _end_span(agent, root_span, {
+        "gen_ai.usage.input_tokens": usage.input_tokens,
+        "gen_ai.usage.output_tokens": usage.output_tokens,
+        "rigging.status": "ok",
+        "rigging.steps": step,
+        "rigging.handoff": bool(agent.handoff),
+    })
     log.append(run_id, "run_finished", {"status": "ok", "content_chars": len(output)})
     log.finish_run(run_id, "ok")
     if owns_log:
@@ -276,6 +337,11 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                        steps=step if not exhausted else spec.limits.max_steps,
                        cost_usd=agent.prices.cost(spec.model, usage), handoff=agent.handoff)
     result.history = messages  # chat REPL only; excluded from --json
+    for exporter in agent.exporters:
+        try:
+            exporter.close()
+        except Exception:
+            continue
     return result
 
 
@@ -318,6 +384,11 @@ def _streaming_call(agent: Assembled, request: ModelRequest, log: EventLog, run_
 
 def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog, run_id: str) -> Message:
     log.append(run_id, "tool_call", call.model_dump())
+    tool_span = _span(agent, "execute_tool", {
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": call.name,
+        "rigging.tool.side_effecting": bool(getattr(tools.get(call.name), "side_effecting", False)),
+    })
     tool = tools.get(call.name)
     if tool is None:
         result = ToolResult.error(call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
@@ -339,6 +410,8 @@ def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
             else:
                 result = tool.run(call)
 
+    _end_span(agent, tool_span, {"rigging.tool.denied": result.denied,
+                                 "rigging.tool.is_error": result.is_error})
     if call.name == "escalate_to_human" and not result.is_error:
         _capture_handoff(agent, result.content, log, run_id)
 

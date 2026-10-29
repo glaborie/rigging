@@ -1,0 +1,13 @@
+# Observability smoke agent: same loop, spans exported over OTLP to Langfuse.
+# Needs (in .env): LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL.
+#   uv run harness run examples/observability/agent.yaml "say hello"
+name: observability-smoke
+model: freellm/codestral
+credential_profile: ollama
+system_prompt: You are a terse assistant. Answer in one sentence.
+observability:
+  exporters: [langfuse]
+  capture_content: true
+limits:
+  max_steps: 4
+  max_tokens: 4000

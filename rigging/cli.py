@@ -7,8 +7,8 @@ Anything not yet built says so and exits 2 — it never pretends.
 from __future__ import annotations
 
 import argparse
-import json
 import pathlib
+import json
 import sys
 import time
 from typing import Any
@@ -19,9 +19,7 @@ from rigging.events import EventLog
 from rigging.manifest import AgentSpec, load_manifest
 from rigging.registry import DEFAULT_REGISTRY
 
-NOT_YET = {
-    "eval": "v0.4",
-}
+NOT_YET: dict[str, str] = {}
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -50,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
     runs.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
     runs.add_argument("--run", default=None, help="show this run's full event trail")
     runs.add_argument("--limit", type=int, default=10)
+
+    ev = sub.add_parser("eval", help="run an eval suite over event-log predicates")
+    ev.add_argument("suite", help="path to suite.yaml")
+    ev.add_argument("--db", default=None)
+    ev.add_argument("--model", default=None, help="override the manifest model for the suite")
+    ev.add_argument("--only", action="append", default=None, help="run only these case ids")
+    ev.add_argument("--json", action="store_true")
 
     idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
     idx.add_argument("manifest")
@@ -110,11 +115,24 @@ def cmd_run(args: argparse.Namespace) -> int:
     return 0 if result.status == "ok" else 1
 
 
+def cmd_eval(args: argparse.Namespace) -> int:
+    from rigging.eval import render, run_suite
+
+    results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only)
+    if args.json:
+        print(json.dumps({"suite": suite.get("name"), "results": [r.__dict__ for r in results]},
+                         indent=2, default=str))
+    else:
+        print(render(results))
+    return 0 if all(r.passed for r in results) else 1
+
+
 def cmd_index(args: argparse.Namespace) -> int:
     import json as _json
     import sqlite3 as _sq
 
     from rigging.manifest import load_manifest
+    from rigging.retriever.qdrant import _embed
     from rigging.types import Chunk
 
     spec = load_manifest(args.manifest)
@@ -210,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval}[args.command]
     return handler(args)
 
 

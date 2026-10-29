@@ -27,3 +27,5 @@ __all__ = [
     "PIIRedactionGuardrail",
     "PromptInjectionGuardrail",
 ]
+
+from rigging.guardrails.refund_window import RefundWindowGuardrail  # noqa: E402,F401

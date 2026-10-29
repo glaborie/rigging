@@ -15,7 +15,6 @@ from pathlib import Path
 
 from rigging.registry import DEFAULT_REGISTRY, tool
 
-
 def _db() -> sqlite3.Connection:
     env = os.environ.get("RIGGING_DEMO_DB", "")
     path = Path(env) if env else Path(__file__).parents[2] / "examples/b2b-support/demo.db"

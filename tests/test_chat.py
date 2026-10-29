@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from rigging.chat import chat
 from rigging.events import EventLog
+from rigging.loop import run_agent
 from rigging.manifest import load_manifest
 from rigging.testing import FakeClient
 

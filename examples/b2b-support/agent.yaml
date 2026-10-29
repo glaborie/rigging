@@ -35,6 +35,9 @@ guardrails:
       config:
         max_amount_usd: 500
         amount_arg: amount
+    - name: refund_window          # found by the eval suite: policy prose is not enforcement
+      config:
+        max_days: 30
   on_tool_result:
     - prompt_injection
   on_output:
@@ -52,6 +55,8 @@ limits:
   max_cost_usd: 0.50
   max_wall_clock_s: 180
 
+# Zero-credential default: no exporters. For traces, set the LANGFUSE_* vars and
+# swap to `exporters: [langfuse]` (see examples/observability/agent.yaml).
 observability:
-  exporters: [langfuse]
+  exporters: []
   capture_content: true

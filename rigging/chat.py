@@ -13,7 +13,7 @@ from typing import Any
 
 from rigging.loop import run_agent
 from rigging.manifest import AgentSpec
-from rigging.types import Message, RunResult
+from rigging.types import Message, ModelDelta, RunResult
 
 HELP = """
 /transcript   print the conversation so far
