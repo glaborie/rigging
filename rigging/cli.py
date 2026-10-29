@@ -210,6 +210,7 @@ def cmd_schema(_args: argparse.Namespace) -> int:
 
 
 def cmd_tools(args: argparse.Namespace) -> int:
+    import rigging.decide
     import rigging.guardrails
     import rigging.retriever
     import rigging.tools.core  # noqa: F401

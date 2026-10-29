@@ -3,10 +3,13 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Scaffold state (v0.0):** the ticked v0.1 items below are implemented and covered
-by tests (27 passing, ruff + mypy --strict clean). The v0.1 exit criteria — a run
-against a live gateway — is **not** met yet, and nothing past v0.1 exists beyond
-interfaces and docs.
+**Current state (2026-10-29):** v0.1–v0.3 are shipped; v0.4 is in progress. The
+v0.4 observability/eval slice is implemented and verified (Langfuse trace; B2B
+golden eval 8/8). The FreeLLMAPI Clef-Flash adapter is implemented and contract-
+tested; its live smoke reached Cloudflare but hit the exhausted daily free quota
+(HTTP 429), so a successful live classification remains pending. MCP integration
+and the decision dataset/scoring harness are not complete. No v0.4 release/tag is
+recorded.
 
 ## v0.1 — the loop is real
 
@@ -30,7 +33,7 @@ with both tools called and a verifiable digest. Transcript:
 Remaining nice-to-have, not gating: a run against a pulled `qwen3:8b`
 (`ollama pull qwen3:8b`).
 
-## v0.2 — knowledge and memory  ⇒ GO PUBLIC HERE  ← NEXT
+## v0.2 — knowledge and memory ⇒ GO-PUBLIC GATE MET (repository remains private)
 
 - [x] `skills.py`: filesystem discovery, frontmatter parsing, index-only system prompt
 - [x] `tools/builtin.py`: `load_skill`, `escalate_to_human`
@@ -72,11 +75,15 @@ The repo stays **private** for now by decision; flipping it public is the remain
 
 ## v0.4 — observability and evaluation
 
-- [ ] `Exporter` + OTel `gen_ai.*` spans, OTLP → Langfuse behind `[langfuse]`
-- [ ] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
-- [ ] `tests/data/decisions.jsonl` (~40 labelled cases) scoring Laya's calibration
+- [x] `Exporter` + OTel `gen_ai.*` spans, OTLP → Langfuse behind `[langfuse]`; live nested trace verified
+- [x] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
+- [ ] decision dataset (~40 labelled cases) + scoring harness for calibration; keep the deterministic safety checks authoritative
+- [x] FreeLLMAPI adapter for `@cf/cloudflare/clef-flash` via `/v1/decisions`; contract tests pass. Live request reached Cloudflare but returned HTTP 429 (daily free quota exhausted), so successful live classification is pending
 - [ ] MCP tool source behind `[mcp]`, namespaced tools
-- [ ] 6–8 golden eval cases for the demo agent
+- [x] 6–8 golden eval cases for the demo agent; live B2B suite passed 8/8
+
+**v0.4 status:** implementation is incomplete until the decision dataset/scorer and MCP
+source are finished; no v0.4 release/tag has been cut.
 
 ## v0.5 — the professional finish
 

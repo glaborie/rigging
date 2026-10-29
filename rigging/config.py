@@ -6,7 +6,7 @@ here. Switching gateways is therefore a config change, not a code change.
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,6 +23,12 @@ class Settings(BaseSettings):
     base_url: str = "http://localhost:20128/v1"
     api_key: str = "not-needed"
     model: str = "beam:cloud"
+
+    # FreeLLMAPI decision endpoint (SystemOne API, not chat completions)
+    freellm_base_url: str = Field(
+        default="http://localhost:3001/v1", validation_alias="FREELLM_BASE_URL"
+    )
+    freellm_api_key: str = Field(default="", validation_alias="FREELLM_API_KEY")
 
     db_path: str = "rigging.db"
     prices_file: str = "prices.yaml"
