@@ -33,6 +33,11 @@ class Settings(BaseSettings):
     # OpenRouter decision endpoint (SystemOne API, same contract as FreeLLMAPI)
     openrouter_api_key: str = Field(default="", validation_alias="OPENROUTER_API_KEY")
 
+    # Local Ollama decision endpoint (no API key); use OLLAMA_BASE_URL for remote host
+    ollama_base_url: str = Field(
+        default="http://localhost:11434", validation_alias="OLLAMA_BASE_URL"
+    )
+
     db_path: str = "rigging.db"
     prices_file: str = "prices.yaml"
     request_timeout_s: float = 120.0

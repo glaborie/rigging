@@ -123,16 +123,17 @@ def decide_via(
 def post_json(
     client: httpx.Client,
     endpoint: str,
-    api_key: str,
+    api_key: str | None,
     payload: dict[str, Any],
     *,
     provider: str,
 ) -> Any:
     """Shared HTTP path: bearer auth, error mapping, JSON parse."""
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
     try:
         response = client.post(
             endpoint,
-            headers={"Authorization": f"Bearer {api_key}"},
+            headers=headers,
             json=payload,
         )
     except httpx.HTTPError as exc:

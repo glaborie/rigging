@@ -4,12 +4,12 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.1 in progress.** The loop, the OpenAI-compatible client (streaming,
-tool-call deltas, retries, reasoning passthrough), the registry, the SQLite event
-log and manifest validation are implemented and tested — 27 tests, ruff and
-`mypy --strict` clean, SSE covered by recorded wire fixtures. It has **not** been
-run against a live gateway yet, and everything past v0.1 is interfaces and
-decisions only. See [`docs/milestones.md`](docs/milestones.md).
+**Status: v0.4.0 shipped; v0.4.1 adds local decision-model support.** The harness
+includes a registry-driven agent loop, event log, MCP tools, OTel/Langfuse
+evaluation, and three pluggable decision-model adapters. The local Ollama
+`d1-omni` adapter is exercised against a live server; see the decision-model
+quickstart below. See [`docs/milestones.md`](docs/milestones.md) for milestone
+evidence and remaining work.
 
 ---
 
@@ -78,6 +78,25 @@ uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transc
 No API key is required for either path. The gateway is OpenAI-compatible HTTP,
 so pointing `RIGGING_BASE_URL` at OmniRoute, vLLM, LM Studio or Ollama's own
 `/v1` is all it takes to switch providers.
+
+## Decision models: cloud or local
+
+Decision models share the `DecisionModel` protocol and registry; select one by
+its literal model id. Ollama's SystemOne API runs locally, with no API key,
+cloud quota, or extra Python dependency. Requires Ollama 0.35 or later.
+
+```bash
+ollama pull d1-omni                 # local 600M model (~850 MB)
+uv run harness tools --kind decision_model
+uv run harness calibrate d1-omni --dataset tests/data/decisions.jsonl
+```
+
+For this labelled 42-case dataset, the live local run returned **accuracy
+0.548, multiclass Brier 0.479**. That is an advisory signal, not a safety gate;
+deterministic guardrails remain authoritative. The local endpoint defaults to
+`http://localhost:11434`; set `OLLAMA_BASE_URL` to override it. Other registered
+options are `respan/span-01-lite:free` (OpenRouter) and
+`@cf/cloudflare/clef-flash` (FreeLLMAPI).
 
 ## Repository layout
 
