@@ -1,0 +1,8 @@
+# Minimal agent: proves the loop and the gateway, nothing else.
+name: hello
+model: beam:cloud
+credential_profile: ollama
+system_prompt: You are a terse assistant. Answer in one sentence.
+limits:
+  max_steps: 3
+  max_tokens: 2000

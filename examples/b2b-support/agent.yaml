@@ -1,0 +1,57 @@
+# The canonical demo agent (ADR-0016, examples/README.md).
+# A B2B procurement and refunds assistant that escalates when it should.
+name: b2b-support
+description: Answers B2B procurement, pricing and refund questions; escalates to a human when out of policy or uncertain.
+
+model: beam:cloud
+credential_profile: ollama
+
+system_prompt_file: prompt.md
+skills_dir: skills
+skills:
+  - procurement-policy
+  - escalation-summary
+
+tools:
+  - search_policies
+  - lookup_order
+  - check_pricing
+  - refund_order
+  - load_skill
+  - escalate_to_human
+
+retriever:
+  name: qdrant
+  options:
+    url: ${QDRANT_URL}
+    collection: rigging_policies
+    embed_model: nomic-embed-text
+
+guardrails:
+  on_input:
+    - pii_redaction
+  on_tool_call:
+    - name: consequential_action
+      config:
+        max_amount_usd: 500
+        amount_arg: amount
+  on_tool_result:
+    - prompt_injection
+  on_output:
+    - pii_redaction
+    - commitment_check
+
+approval:
+  policy: cli
+  side_effecting_tools:
+    - refund_order
+
+limits:
+  max_steps: 20
+  max_tokens: 60000
+  max_cost_usd: 0.50
+  max_wall_clock_s: 180
+
+observability:
+  exporters: [langfuse]
+  capture_content: true

@@ -1,0 +1,18 @@
+# USD per 1M tokens. ADR-0011: cost = gateway `usage` x these numbers.
+# An unknown model logs a `cost_unknown` event and skips the USD limit.
+# Keep this short and honest; it is not a billing system.
+beam:cloud:
+  input: 0.0
+  output: 0.0
+qwen3:8b:
+  input: 0.0
+  output: 0.0
+qwen3:4b:
+  input: 0.0
+  output: 0.0
+openai/gpt-4o-mini:
+  input: 0.15
+  output: 0.60
+anthropic/claude-sonnet-4:
+  input: 3.0
+  output: 15.0

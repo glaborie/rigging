@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/<owner>/rigging/schema/agent.schema.json",
+  "title": "rigging agent manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "model"
+  ],
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Agent name, used for spans and run listings."
+    },
+    "description": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string",
+      "examples": [
+        "beam:cloud",
+        "qwen3:8b",
+        "qwen/qwen3-235b-a22b"
+      ]
+    },
+    "credential_profile": {
+      "type": "string",
+      "default": "ollama",
+      "description": "Named profile from .env; names the provider, never contains a secret."
+    },
+    "system_prompt": {
+      "type": "string"
+    },
+    "system_prompt_file": {
+      "type": "string",
+      "description": "Path relative to the manifest."
+    },
+    "tools": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "skills": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "skills_dir": {
+      "type": "string",
+      "default": "skills"
+    },
+    "retriever": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "examples": [
+            "qdrant",
+            "fts5"
+          ]
+        },
+        "options": {
+          "type": "object"
+        }
+      }
+    },
+    "guardrails": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "on_input": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guardrailRef"
+          }
+        },
+        "on_tool_call": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guardrailRef"
+          }
+        },
+        "on_tool_result": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guardrailRef"
+          }
+        },
+        "on_output": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/guardrailRef"
+          }
+        }
+      }
+    },
+    "approval": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "policy": {
+          "enum": [
+            "cli",
+            "scripted",
+            "auto_deny"
+          ],
+          "default": "auto_deny"
+        },
+        "side_effecting_tools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "max_steps": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 20
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "max_cost_usd": {
+          "type": "number",
+          "minimum": 0
+        },
+        "max_wall_clock_s": {
+          "type": "number",
+          "minimum": 1
+        }
+      }
+    },
+    "observability": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "exporters": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "langfuse",
+              "mlflow",
+              "console"
+            ]
+          },
+          "default": []
+        },
+        "capture_content": {
+          "type": "boolean",
+          "default": true
+        }
+      }
+    },
+    "mcp_servers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "url": {
+            "type": "string"
+          },
+          "transport": {
+            "enum": [
+              "stdio",
+              "http",
+              "sse"
+            ],
+            "default": "stdio"
+          }
+        },
+        "oneOf": [
+          {
+            "required": [
+              "command"
+            ]
+          },
+          {
+            "required": [
+              "url"
+            ]
+          }
+        ]
+      }
+    }
+  },
+  "$defs": {
+    "guardrailRef": {
+      "oneOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name"
+          ],
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "config": {
+              "type": "object"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

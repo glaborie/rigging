@@ -1,0 +1,6 @@
+data: {"choices":[{"index":0,"delta":{"content":"still works"}}]}
+
+data: {this is not json}
+
+data: [DONE]
+
