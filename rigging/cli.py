@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import sys
 import time
 from typing import Any
@@ -19,7 +20,6 @@ from rigging.manifest import AgentSpec, load_manifest
 from rigging.registry import DEFAULT_REGISTRY
 
 NOT_YET = {
-    "index": "v0.3",
     "eval": "v0.4",
 }
 
@@ -51,6 +51,9 @@ def _parser() -> argparse.ArgumentParser:
     runs.add_argument("--run", default=None, help="show this run's full event trail")
     runs.add_argument("--limit", type=int, default=10)
 
+    idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
+    idx.add_argument("manifest")
+
     chat = sub.add_parser("chat", help="interactive REPL: one session, many runs")
     chat.add_argument("manifest")
     chat.add_argument("--db", default=None)
@@ -80,6 +83,7 @@ def cmd_run(args: argparse.Namespace) -> int:
             sys.stderr.flush()
 
     log = EventLog(args.db or settings.db_path)
+    stream = None if args.json else emit  # --json means machine-readable stdout
     client = None
     if args.replay:
         from rigging.replay import ReplayClient
@@ -88,7 +92,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # replay is offline and its transcript is already in the file; streaming a
     # recording through the SSE reassembler would be theatre
     result = run_agent(spec, args.prompt, log=log, session_id=args.session,
-                       stream=None if args.replay else emit,
+                       stream=stream,
                        client=client,
                        approval=ScriptedApproval(True) if args.yes or args.replay else None)
 
@@ -104,6 +108,40 @@ def cmd_run(args: argparse.Namespace) -> int:
     else:
         print(json.dumps(result.model_dump(), indent=2, default=str))
     return 0 if result.status == "ok" else 1
+
+
+def cmd_index(args: argparse.Namespace) -> int:
+    import json as _json
+    import sqlite3 as _sq
+
+    from rigging.manifest import load_manifest
+    from rigging.types import Chunk
+
+    spec = load_manifest(args.manifest)
+    if spec.retriever is None:
+        print("manifest has no retriever; nothing to index", file=sys.stderr)
+        return 1
+    if spec.retriever.name == "fts5":
+        db_path = (pathlib.Path(spec.source_path).parent / "demo.db") if spec.source_path else pathlib.Path("demo.db")
+        db = _sq.connect(db_path)
+        n = db.execute("SELECT count(*) FROM chunks").fetchone()[0]
+        print(f"fts5: chunks already live in {db_path} ({n} rows) — seed.py wrote them; nothing to do.")
+        return 0
+    if spec.retriever.name != "qdrant":
+        print(f"unknown retriever {spec.retriever.name!r}", file=sys.stderr)
+        return 1
+
+    # qdrant: embed the chunks table and upsert (needs ollama + qdrant up)
+    db_path = (pathlib.Path(spec.source_path).parent / "demo.db") if spec.source_path else pathlib.Path("demo.db")
+    db = _sq.connect(db_path)
+    rows = db.execute("SELECT id, text, source, metadata FROM chunks").fetchall()
+    chunks = [Chunk(id=r[0], text=r[1], source=r[2], metadata=_json.loads(r[3]) if r[3] else {}) for r in rows]
+    from rigging.retriever.qdrant import QdrantRetriever
+
+    r = QdrantRetriever(**{k: v for k, v in spec.retriever.options.items()})
+    n = r.index(chunks)
+    print(f"qdrant: indexed {n} chunks into {r.collection} at {r.url}")
+    return 0
 
 
 def cmd_chat(args: argparse.Namespace) -> int:
@@ -172,7 +210,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index}[args.command]
     return handler(args)
 
 

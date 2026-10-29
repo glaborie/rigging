@@ -50,9 +50,20 @@ class Assembled:
     skills: Any = None
     approval: Any = None
     prices: PriceTable = field(default_factory=PriceTable.load)
+    handoff: Any = None  # set when the model calls escalate_to_human
 
     def tool_map(self) -> dict[str, Any]:
         return {t.name: t for t in self.tools}
+
+
+def _sub_env(value: Any) -> Any:
+    """${VAR} in manifest option values reads the environment; unset means empty."""
+    import os
+    import re as _re
+
+    if isinstance(value, str):
+        return _re.sub(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}", lambda m: os.environ.get(m.group(1), ""), value)
+    return value
 
 
 def _coerce_tool(obj: Any) -> Any:
@@ -72,7 +83,9 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         # import; third-party entry points are discovered separately (ADR-0003).
         import rigging.guardrails
         import rigging.retriever
-        import rigging.tools.core  # noqa: F401
+        import rigging.tools.core
+        if any(n in ("lookup_order", "check_pricing", "refund_order") for n in spec.tools):
+            import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY
 
     if client is None:
@@ -80,7 +93,9 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
 
         client = OpenAICompatClient(settings.base_url, settings.api_key, timeout=settings.request_timeout_s)
 
-    tools: list[Any] = [_coerce_tool(obj) for obj in registry.resolve_all("tool", spec.tools)]
+    fabricated = {"escalate_to_human", "search_policies", "load_skill"}
+    registry_tools = [n for n in spec.tools if n not in fabricated]
+    tools: list[Any] = [_coerce_tool(obj) for obj in registry.resolve_all("tool", registry_tools)]
 
     guardrails: dict[str, list[Any]] = {"on_input": [], "on_tool_call": [], "on_tool_result": [], "on_output": []}
     for hook in guardrails:
@@ -101,6 +116,22 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         if missing:
             raise CapabilityNotFound("skill", missing, sorted(known))
         tools.append(make_load_skill_tool(skills))
+
+    if spec.retriever is not None:
+        from pathlib import Path as _Path
+
+        from rigging.tools.builtin import make_search_tool
+
+        options = {k: _sub_env(v) for k, v in spec.retriever.options.items()}
+        if spec.retriever.name == "fts5":
+            options.setdefault("path", (_Path(spec.source_path).parent / "demo.db") if spec.source_path else _Path("demo.db"))
+        retriever = registry.get("retriever", spec.retriever.name)(**options)
+        tools.append(make_search_tool(retriever))
+
+    if "escalate_to_human" in spec.tools:
+        from rigging.tools.builtin import make_escalate_tool
+
+        tools.append(make_escalate_tool())
 
     approval = {
         "cli": CLIPromptApproval,
@@ -243,7 +274,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         log.close()
     result = RunResult(run_id=run_id, status="ok", output=output, usage=usage,
                        steps=step if not exhausted else spec.limits.max_steps,
-                       cost_usd=agent.prices.cost(spec.model, usage))
+                       cost_usd=agent.prices.cost(spec.model, usage), handoff=agent.handoff)
     result.history = messages  # chat REPL only; excluded from --json
     return result
 
@@ -291,7 +322,7 @@ def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
     if tool is None:
         result = ToolResult.error(call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
     else:
-        verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], [call, tool])
+        verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
         log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name, "checks": notes})
         if isinstance(verdict, Deny):
             result = ToolResult.error(call, f"denied by guardrail: {verdict.reason}", denied=True)
@@ -308,13 +339,35 @@ def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
             else:
                 result = tool.run(call)
 
-    verdict, notes = _apply("on_tool_result", agent.guardrails["on_tool_result"], [call, result.content])
+    if call.name == "escalate_to_human" and not result.is_error:
+        _capture_handoff(agent, result.content, log, run_id)
+
+    verdict, notes = _apply("on_tool_result", agent.guardrails["on_tool_result"], call, result.content)
     if isinstance(verdict, Transform):
         result = result.model_copy(update={"content": verdict.value})
     log.append(run_id, "tool_result", {"call_id": result.call_id, "name": result.name,
                                        "content": result.content, "is_error": result.is_error,
                                        "denied": result.denied, "duration_ms": result.duration_ms})
     return Message(role="tool", tool_call_id=result.call_id, name=result.name, content=result.content)
+
+
+def _capture_handoff(agent: Assembled, content: str, log: EventLog, run_id: str) -> None:
+    """`escalate_to_human` returns "HANDOFF {json}"; parse it into a structured handoff."""
+    import json as _json
+
+    from rigging.types import Handoff
+
+    try:
+        payload = _json.loads(content.removeprefix("HANDOFF ").strip())
+        agent.handoff = Handoff(**payload)
+        if not agent.handoff.transcript_run_id:
+            agent.handoff = agent.handoff.model_copy(update={"transcript_run_id": run_id})
+    except Exception as exc:  # a malformed handoff must not crash the run
+        log.append(run_id, "error", {"stage": "escalation", "error": str(exc), "raw": content[:200]})
+        return
+    log.append(run_id, "escalation", {"reason": agent.handoff.reason,
+                                      "summary": agent.handoff.summary,
+                                      "transcript_run_id": agent.handoff.transcript_run_id})
 
 
 def _final_answer(agent: Assembled, spec: AgentSpec, messages: list[Message], log: EventLog,

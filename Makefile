@@ -92,8 +92,11 @@ run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT=
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),)
 
-index: ## (re)build the policy index (v0.3)
-	uv run harness index
+seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
+	uv run python examples/b2b-support/seed.py
+
+index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds for qdrant
+	uv run harness index $(MANIFEST)
 
 eval: ## run an eval suite over the event log (v0.4)
 	uv run harness eval

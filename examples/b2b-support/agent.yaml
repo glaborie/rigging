@@ -20,12 +20,12 @@ tools:
   - load_skill
   - escalate_to_human
 
+# Zero-credential default: FTS5/BM25 over the chunks seed.py wrote into demo.db.
+# Upgrade path (needs `ollama pull nomic-embed-text` + qdrant on :6345, then
+# `make index`): swap name to qdrant and set url: ${QDRANT_URL}.
 retriever:
-  name: qdrant
-  options:
-    url: ${QDRANT_URL}
-    collection: rigging_policies
-    embed_model: nomic-embed-text
+  name: fts5
+  options: {}
 
 guardrails:
   on_input:

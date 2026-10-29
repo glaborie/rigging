@@ -110,9 +110,11 @@ text claims something the code does not do.
 
 `docs/milestones.md` → the first unticked box. v0.1 is **done** (2026-10-29: live
 end-to-end runs through OmniRoute -> freellmapi -> codestral and beam:cloud, two-tool
-task complete, 30 tests green). v0.2 is next: skills + progressive disclosure, the
-`chat` REPL, sessions, and JSONL export + `--replay`. Do not start v0.3 work
-(guardrails, retrieval, the b2b-support demo) before v0.2 is shippable.
+task complete, 30 tests green). v0.2 shipped (tag `v0.2.0`, release published). v0.3 shipped 2026-10-29:
+guardrails + approval live in the demo, fts5/qdrant retrievers, seeded fixture DB,
+`harness index`. All four exit-criteria demos verified live. v0.4 is next:
+OTel → Langfuse observability, eval CLI over recorded transcripts (`--replay`),
+MCP consumption.
 
 ## Things that will tempt you and are wrong here
 

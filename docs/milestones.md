@@ -46,17 +46,29 @@ The repo stays **private** for now by decision; flipping it public is the remain
 
 ## v0.3 — safety and the demo
 
-- [ ] four guardrails: PII redaction, prompt-injection heuristic, consequential-action
-      gate, out-of-policy-commitment check
-- [ ] `ApprovalPolicy`: CLI prompt, scripted, auto-deny
-- [ ] `retriever/qdrant.py` + `retriever/fts5.py`, `harness index`
-- [ ] `decide/laya.py` behind `[laya]`, advisory only
-- [ ] `examples/b2b-support/`: seeded SQLite fixture DB, 2 skills, 5 tools, agent.yaml
-- [ ] `make run MANIFEST=examples/b2b-support/agent.yaml ...` (compose profile `default`:
-      omniroute; zero credentials); `make help` documents every target and override
+- [x] four guardrails: PII redaction, prompt-injection heuristic, consequential-action
+      gate, out-of-policy-commitment check (all wired into the demo manifest)
+- [x] `ApprovalPolicy`: CLI prompt, scripted, auto-deny
+- [x] `retriever/qdrant.py` (ollama `nomic-embed-text`, behind `[qdrant]`) + `retriever/fts5.py`
+      (reference, zero-credential); `harness index` (no-op for fts5, embeds+upserts for qdrant)
+- [x] `decide/laya.py` behind `[laya]`, advisory only
+- [x] `examples/b2b-support/`: seeded SQLite fixture DB (40 products, 12 orders, 19 policy
+      chunks — deterministic seed=7), 2 skills, 5 tools, agent.yaml
+- [x] `make run MANIFEST=examples/b2b-support/agent.yaml ...` — zero credentials: fts5
+      retriever over the seeded demo.db, model via the local OmniRoute stack
 
-**Exit criteria:** a refund request is blocked pending approval, an out-of-policy
-commitment is caught, a vague request escalates with a structured handoff.
+**Exit criteria — MET, verified live 2026-10-29 (beam:cloud via OmniRoute):**
+1. *Refund blocked pending approval:* refund_order(112.50, ORD-1002) →
+   `approval_requested` → operator answered "n" → `approval_verdict: approved=false`
+   → tool denied → model loaded the `escalation-summary` skill → structured handoff.
+2. *Over-authority caught:* a $1,350 refund attempt was denied by the
+   consequential-action guardrail ($500 limit) before execution → escalated with reason
+   `needs_approval`. (Bonus honesty: a deliberately wrong amount, $186.40, was caught
+   by the model reconciling against lookup_order and escalated instead of processed.)
+3. *Out-of-policy commitment:* permanent-discount demand refused with the CMP-001
+   passage cited, then escalated.
+4. *Human demanded:* explicit "get me a human manager" → structured handoff with
+   verified order facts (reason=customer_requested).
 
 ## v0.4 — observability and evaluation
 
