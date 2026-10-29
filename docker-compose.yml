@@ -4,7 +4,7 @@
 #   retrieval      + qdrant              — policy index, port 6345 to avoid the
 #                                          host's existing Qdrant stacks (6333,
 #                                          6335, 6340 are taken)
-# `make demo` works with no profile keys at all: Ollama runs on the host.
+# `make hello` works with no profile keys at all: Ollama runs on the host.
 
 services:
   omniroute:

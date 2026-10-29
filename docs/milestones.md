@@ -45,7 +45,8 @@ repo flipped public.
 - [ ] `retriever/qdrant.py` + `retriever/fts5.py`, `harness index`
 - [ ] `decide/laya.py` behind `[laya]`, advisory only
 - [ ] `examples/b2b-support/`: seeded SQLite fixture DB, 2 skills, 5 tools, agent.yaml
-- [ ] `make demo` (compose profile `default`: omniroute; zero credentials)
+- [ ] `make run MANIFEST=examples/b2b-support/agent.yaml ...` (compose profile `default`:
+      omniroute; zero credentials); `make help` documents every target and override
 
 **Exit criteria:** a refund request is blocked pending approval, an out-of-policy
 commitment is caught, a vague request escalates with a structured handoff.

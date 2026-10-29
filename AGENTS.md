@@ -75,6 +75,7 @@ tests/                             unit, SSE wire fixtures, loop invariants
 
 ```bash
 uv sync --extra dev          # env
+make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)

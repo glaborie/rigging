@@ -21,7 +21,7 @@ and with an `openrouter` profile documented for higher quality.
 ## Consequences
 
 Zero-cost, high-quality default now, with no dependency on the promotion: when
-`beam:cloud` stops being free, it is a YAML edit. Cost: `make demo` needs a free
+`beam:cloud` stops being free, it is a YAML edit. Cost: `make hello` needs a free
 Ollama account rather than being fully offline, so the README documents both paths
 and "zero-credential" means zero *API key*.
 
