@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     )
     freellm_api_key: str = Field(default="", validation_alias="FREELLM_API_KEY")
 
+    # OpenRouter decision endpoint (SystemOne API, same contract as FreeLLMAPI)
+    openrouter_api_key: str = Field(default="", validation_alias="OPENROUTER_API_KEY")
+
     db_path: str = "rigging.db"
     prices_file: str = "prices.yaml"
     request_timeout_s: float = 120.0

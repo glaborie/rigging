@@ -6,15 +6,13 @@ not a chat-completions model and must not be called through ``LLMClient``.
 
 from __future__ import annotations
 
-import json
-import math
 from collections.abc import Sequence
 from typing import Any
 
 import httpx
 
 from rigging.config import Settings
-from rigging.errors import RiggingError, TransportError
+from rigging.decide.systemone import decide_via, post_json
 from rigging.protocols import DecisionAnswer
 from rigging.registry import decision_model
 
@@ -54,94 +52,12 @@ class FreeLLMClefFlash:
         self, state: str, questions: dict[str, Sequence[str]]
     ) -> dict[str, DecisionAnswer]:
         """Return a choice and calibrated option distribution for each question."""
-        if not questions:
-            raise ValueError("at least one decision question is required")
-        if len(questions) > 64:
-            raise ValueError("Clef-Flash accepts at most 64 questions per request")
+        return decide_via(self, "FreeLLMAPI", self.model_id, state, questions)
 
-        wire_questions: dict[str, Any] = {}
-        question_ids: dict[str, tuple[str, tuple[str, ...]]] = {}
-        for index, (prompt, choices) in enumerate(questions.items()):
-            if not prompt.strip():
-                raise ValueError("decision question text must not be empty")
-            if isinstance(choices, (str, bytes)):
-                raise ValueError(f"question {prompt!r} choices must be a sequence of labels")
-            labels = tuple(choices)
-            if len(labels) < 2:
-                raise ValueError(f"question {prompt!r} requires at least two options")
-            if any(not isinstance(label, str) or not label.strip() for label in labels):
-                raise ValueError(f"question {prompt!r} options must be non-empty strings")
-            if len(set(labels)) != len(labels):
-                raise ValueError(f"question {prompt!r} options must be unique")
-
-            question_id = f"q{index}"
-            question_ids[question_id] = (prompt, labels)
-            wire_questions[question_id] = {
-                "type": "choice",
-                "instructions": prompt,
-                "criteria": {label: label for label in labels},
-            }
-
-        payload = {
-            "model": self.model_id,
-            "state": state,
-            "questions": wire_questions,
-        }
-        try:
-            response = self._client.post(
-                self.endpoint,
-                headers={"Authorization": f"Bearer {self.api_key}"},
-                json=payload,
-            )
-        except httpx.HTTPError as exc:
-            raise TransportError(None, str(exc), attempts=1) from exc
-        if response.is_error:
-            raise TransportError(response.status_code, response.text, attempts=1)
-        try:
-            body = response.json()
-        except (ValueError, json.JSONDecodeError) as exc:
-            raise RiggingError("FreeLLMAPI returned invalid JSON for a decision request") from exc
-        if not isinstance(body, dict):
-            raise RiggingError("FreeLLMAPI decision response must be a JSON object")
-        result = body.get("result", body)
-        if not isinstance(result, dict) or not isinstance(result.get("answers"), dict):
-            raise RiggingError("FreeLLMAPI decision response is missing answers")
-
-        answers: dict[str, DecisionAnswer] = {}
-        for question_id, (prompt, option_labels) in question_ids.items():
-            raw = result["answers"].get(question_id)
-            if not isinstance(raw, dict):
-                raise RiggingError(f"FreeLLMAPI decision response is missing answer {question_id}")
-            choice = raw.get("choice")
-            if not isinstance(choice, str) or choice not in option_labels:
-                raise RiggingError(
-                    f"FreeLLMAPI returned an unknown choice for {question_id}: {choice!r}"
-                )
-            raw_distribution = raw.get("probabilities")
-            if not isinstance(raw_distribution, dict):
-                raise RiggingError(
-                    f"FreeLLMAPI response is missing probabilities for {question_id}"
-                )
-            distribution: dict[str, float] = {}
-            for label in option_labels:
-                value = raw_distribution.get(label)
-                if isinstance(value, bool) or not isinstance(value, (int, float)):
-                    raise RiggingError(
-                        f"FreeLLMAPI returned an invalid probability for {question_id}/{label}"
-                    )
-                probability = float(value)
-                if not math.isfinite(probability) or not 0.0 <= probability <= 1.0:
-                    raise RiggingError(
-                        f"FreeLLMAPI returned an out-of-range probability for {question_id}/{label}"
-                    )
-                distribution[label] = probability
-            answers[prompt] = DecisionAnswer(
-                question=prompt,
-                choice=choice,
-                probability=distribution[choice],
-                distribution=distribution,
-            )
-        return answers
+    def send(self, payload: dict[str, Any]) -> Any:
+        return post_json(
+            self._client, self.endpoint, self.api_key, payload, provider="FreeLLMAPI"
+        )
 
     def close(self) -> None:
         """Close the owned HTTP client; injected clients remain caller-owned."""
