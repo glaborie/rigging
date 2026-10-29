@@ -36,11 +36,13 @@ Remaining nice-to-have, not gating: a run against a pulled `qwen3:8b`
 - [x] `tools/builtin.py`: `load_skill`, `escalate_to_human`
 - [x] sessions table, `harness chat` REPL (`/transcript`, `/escalate`; per-turn runs share one session). Verified live: two-turn run through the gateway recalled a codeword given in the first turn
 - [x] JSONL export + `harness run --replay`. Verified live: a recorded two-tool run replayed byte-identical with the API base at a dead port (tests: `tests/test_replay.py`)
-- [ ] README quickstart verified from a clean clone on Linux
+- [x] README quickstart verified from a clean clone on Linux (2026-10-29: fresh clone, install 1 s, 34 tests green, live run in 3 s)
 
-**Publish gate:** 5-minute zero-API-key quickstart · green CI on `main` · committed
-demo transcript under `examples/` · architecture diagram · no TODOs in user docs ·
-repo flipped public.
+**Publish gate — met except the flip (2026-10-29):** 5-minute zero-API-key quickstart ✓
+(verified from a clean clone) · green CI on `main` ✓ · committed demo transcript ✓ ·
+architecture diagram ✓ · no TODOs in user docs ✓ · tagged `v0.2.0` with release notes ✓.
+The repo stays **private** for now by decision; flipping it public is the remaining step
+(then add branch protection, which needs a public repo or Pro).
 
 ## v0.3 — safety and the demo
 

@@ -67,8 +67,3 @@ ignore_missing_imports = true
 addopts = "-q"
 testpaths = ["tests"]
 markers = ["live: hits a real model or gateway; opt-in only"]
-
-[dependency-groups]
-dev = [
-    "pytest-cov>=7.1.0",
-]
