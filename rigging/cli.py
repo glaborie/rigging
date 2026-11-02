@@ -102,8 +102,10 @@ def cmd_run(args: argparse.Namespace) -> int:
         from rigging.replay import ReplayClient
 
         client = ReplayClient(args.replay)
-    # replay is offline and its transcript is already in the file; streaming a
-    # recording through the SSE reassembler would be theatre
+        # replay is offline and its transcript is already in the file; streaming a
+        # recording through the SSE reassembler would be theatre (and ReplayClient
+        # has no .stream())
+        stream = None
     result = run_agent(spec, args.prompt, log=log, session_id=args.session,
                        stream=stream,
                        client=client,
