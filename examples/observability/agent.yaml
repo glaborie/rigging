@@ -1,6 +1,7 @@
 # Observability smoke agent: same loop, spans exported over OTLP to Langfuse.
-# Needs (in .env): LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_BASE_URL.
+# Needs (in .env): LANGFUSE_HOST, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY.
 #   uv run harness run examples/observability/agent.yaml "say hello"
+# Cloud is the default host; no local Langfuse container is required.
 name: observability-smoke
 model: freellm/codestral
 credential_profile: ollama
