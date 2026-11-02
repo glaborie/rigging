@@ -233,6 +233,17 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     if approval is not None:
         agent.approval = approval
 
+    def _close_and(result: RunResult) -> RunResult:
+        """Flush every exporter on every exit path. A batch processor that is never
+        shut down drops its spans when the CLI exits, so a denied or exhausted run
+        would leave no trace at all."""
+        for exporter in agent.exporters:
+            try:
+                exporter.close()
+            except Exception:
+                continue
+        return result
+
     log = log or EventLog(settings.db_path)
     owns_log = log is None
     session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
@@ -251,7 +262,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     log.append(run_id, "guardrail_verdict", {"hook": "on_input", "checks": notes})
     if isinstance(verdict, Deny):
         log.finish_run(run_id, "denied")
-        return RunResult(run_id=run_id, status="denied", error=verdict.reason)
+        return _close_and(RunResult(run_id=run_id, status="denied", error=verdict.reason))
     user_content = verdict.value if isinstance(verdict, Transform) else prompt
     messages.append(Message(role="user", content=user_content))
     log.append(run_id, "input_received", {"content": user_content})
@@ -322,9 +333,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         final = _final_answer(agent, spec, messages, log, run_id, stream)
         if final is None:
             log.finish_run(run_id, "budget_exhausted")
-            return RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
-                             steps=spec.limits.max_steps, error=exhausted,
-                             cost_usd=agent.prices.cost(spec.model, usage))
+            return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
+                                        steps=spec.limits.max_steps, error=exhausted,
+                                        cost_usd=agent.prices.cost(spec.model, usage)))
         last = final
 
     output = last.message.content if last else ""
@@ -332,7 +343,8 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     log.append(run_id, "output_verdict", {"checks": out_notes})
     if isinstance(out_verdict, Deny):
         log.finish_run(run_id, "denied")
-        return RunResult(run_id=run_id, status="denied", usage=usage, error=out_verdict.reason)
+        return _close_and(RunResult(run_id=run_id, status="denied", usage=usage,
+                                    error=out_verdict.reason))
     if isinstance(out_verdict, Transform):
         output = out_verdict.value
 
@@ -351,12 +363,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                        steps=step if not exhausted else spec.limits.max_steps,
                        cost_usd=agent.prices.cost(spec.model, usage), handoff=agent.handoff)
     result.history = messages  # chat REPL only; excluded from --json
-    for exporter in agent.exporters:
-        try:
-            exporter.close()
-        except Exception:
-            continue
-    return result
+    return _close_and(result)
 
 
 def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTable, step: int) -> str | None:

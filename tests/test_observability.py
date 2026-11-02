@@ -97,6 +97,53 @@ def test_a_broken_exporter_never_breaks_a_run(tmp_path, monkeypatch):
     assert result.status == "ok" and result.output == "hello"
 
 
+# ------------------------------------------------- exporters close on every exit
+
+def test_exporters_close_when_the_output_is_denied(tmp_path, monkeypatch):
+    """A denied run still produced spans; dropping the batch would lose them."""
+    from rigging.manifest import GuardrailRef, Guardrails
+    from rigging.protocols import Allow, Deny
+    from rigging.registry import Registry
+
+    class NoApologies:
+        name = "no_apologies"
+        hooks = ("on_output",)
+
+        def on_input(self, messages): return Allow()
+        def on_tool_call(self, call, tool): return Allow()
+        def on_tool_result(self, call, content): return Allow()
+        def on_output(self, text, messages): return Deny("no")
+
+    reg = Registry()
+    reg.add("guardrail", "no_apologies", NoApologies())
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+    spec.guardrails = Guardrails(on_output=[GuardrailRef(name="no_apologies")])
+
+    result = run_agent(spec, "hi", log=EventLog(tmp_path / "d.db"), registry=reg,
+                       client=FakeClient([{"role": "assistant", "content": "sorry"}]))
+
+    assert result.status == "denied"
+    assert exporter.closed is True
+
+
+def test_exporters_close_when_the_budget_is_exhausted(tmp_path, monkeypatch):
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, tools=["sha256_hex"], limits={"max_steps": 1},
+                 observability={"exporters": ["console"]})
+
+    # One tool call uses the only step; the final-answer call has no scripted
+    # response left, so the run ends as budget_exhausted.
+    result = run_agent(spec, "hash", log=EventLog(tmp_path / "b.db"), client=FakeClient([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "sha256_hex", "arguments": {"text": "x"}}]},
+    ]))
+
+    assert result.status == "budget_exhausted"
+    assert exporter.closed is True
+
 def test_eval_predicates_over_the_event_log(tmp_path, monkeypatch):
     import rigging.eval as eval_mod
 
