@@ -42,6 +42,12 @@ class Settings(BaseSettings):
         default="http://localhost:11434", validation_alias="OLLAMA_BASE_URL"
     )
 
+    # Langfuse exporter: read from .env like every other key, so `harness run`
+    # works without sourcing the file by hand. Empty host means cloud default.
+    langfuse_host: str = Field(default="", validation_alias="LANGFUSE_HOST")
+    langfuse_public_key: str = Field(default="", validation_alias="LANGFUSE_PUBLIC_KEY")
+    langfuse_secret_key: str = Field(default="", validation_alias="LANGFUSE_SECRET_KEY")
+
     db_path: str = "rigging.db"
     prices_file: str = "prices.yaml"
     request_timeout_s: float = 120.0

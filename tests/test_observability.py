@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import base64
+
 import yaml
 
 from rigging.events import EventLog
@@ -132,3 +134,96 @@ def test_eval_predicates_over_the_event_log(tmp_path, monkeypatch):
     assert by_id["calls-tool"].passed, by_id["calls-tool"].failures
     assert not by_id["wrong-tool"].passed
     assert "was not called" in by_id["wrong-tool"].failures[0]
+
+
+# ------------------------------------------------------------------ langfuse host
+
+def test_langfuse_host_is_honoured(monkeypatch):
+    from rigging.observability import LangfuseExporter
+
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    exporter = LangfuseExporter()
+    assert exporter.endpoint == "https://cloud.langfuse.com/api/public/otel/v1/traces"
+
+
+def test_langfuse_host_wins_over_the_legacy_base_url(monkeypatch):
+    from rigging.observability import LangfuseExporter
+
+    monkeypatch.setenv("LANGFUSE_HOST", "https://host.example")
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://legacy.example")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    assert LangfuseExporter().endpoint == "https://host.example/api/public/otel/v1/traces"
+
+
+def test_langfuse_legacy_base_url_still_works(monkeypatch):
+    import rigging.observability as obs
+
+    monkeypatch.delenv("LANGFUSE_HOST", raising=False)
+    monkeypatch.setenv("LANGFUSE_BASE_URL", "https://legacy.example/")
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setattr(obs, "settings", _no_dotenv())  # no LANGFUSE_HOST in .env
+    assert obs.LangfuseExporter().endpoint == "https://legacy.example/api/public/otel/v1/traces"
+
+
+class _no_dotenv:
+    """Stand-in for Settings with no .env keys, so a test sees the environment only."""
+
+    langfuse_host = ""
+    langfuse_public_key = ""
+    langfuse_secret_key = ""
+
+
+def test_langfuse_credentials_are_required(monkeypatch):
+    import pytest
+
+    import rigging.observability as obs
+
+    monkeypatch.setenv("LANGFUSE_HOST", "https://cloud.langfuse.com")
+    monkeypatch.delenv("LANGFUSE_PUBLIC_KEY", raising=False)
+    monkeypatch.delenv("LANGFUSE_SECRET_KEY", raising=False)
+    monkeypatch.setattr(obs, "settings", _no_dotenv())
+    with pytest.raises(ValueError, match="LANGFUSE_PUBLIC_KEY"):
+        obs.LangfuseExporter()
+
+
+def test_settings_reads_langfuse_keys_from_the_env_file(tmp_path, monkeypatch):
+    """.env is the documented home for secrets; `harness run` must not need sourcing."""
+    from rigging.config import Settings
+
+    for key in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    env = tmp_path / ".env"
+    env.write_text(
+        "LANGFUSE_HOST=https://cloud.langfuse.com\n"
+        "LANGFUSE_PUBLIC_KEY=pk-from-file\n"
+        "LANGFUSE_SECRET_KEY=sk-from-file\n"
+    )
+
+    s = Settings(_env_file=str(env))
+    assert s.langfuse_host == "https://cloud.langfuse.com"
+    assert s.langfuse_public_key == "pk-from-file"
+    assert s.langfuse_secret_key == "sk-from-file"
+
+
+def test_exporter_falls_back_to_dotenv_settings(monkeypatch):
+    """No exported shell vars, keys only in .env: the exporter still builds."""
+    import types
+
+    import rigging.observability as obs
+
+    for key in ("LANGFUSE_HOST", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY",
+                "LANGFUSE_BASE_URL"):
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(obs, "settings", types.SimpleNamespace(
+        langfuse_host="https://cloud.langfuse.com",
+        langfuse_public_key="pk-from-file",
+        langfuse_secret_key="sk-from-file",
+    ))
+
+    exporter = obs.LangfuseExporter()
+    assert exporter.endpoint == "https://cloud.langfuse.com/api/public/otel/v1/traces"
+    assert base64.b64decode(exporter._auth).decode() == "pk-from-file:sk-from-file"

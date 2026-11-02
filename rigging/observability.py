@@ -20,6 +20,8 @@ import base64
 import os
 from typing import Any
 
+from rigging.config import settings
+
 
 class ConsoleExporter:
     """Prints span start/end. Deliberately boring; useful for wiring and tests."""
@@ -46,13 +48,20 @@ class LangfuseExporter:
                  secret_key: str | None = None, service_name: str = "rigging",
                  capture_content: bool = True) -> None:
         self.capture_content = capture_content
-        base = endpoint or os.environ.get("LANGFUSE_BASE_URL", "https://cloud.langfuse.com")
+        # Precedence: explicit argument → real environment → .env (via Settings) →
+        # LANGFUSE_BASE_URL (older name) → cloud default. The Settings hop is what
+        # makes `harness run` work without `set -a; . ./.env` in the shell.
+        base = (endpoint
+                or os.environ.get("LANGFUSE_HOST")
+                or settings.langfuse_host
+                or os.environ.get("LANGFUSE_BASE_URL")
+                or "https://cloud.langfuse.com")
         base = base.rstrip("/")
         if not base.endswith("/api/public/otel/v1/traces"):
             base = f"{base}/api/public/otel/v1/traces"
         self.endpoint = base
-        pk = public_key or os.environ.get("LANGFUSE_PUBLIC_KEY", "")
-        sk = secret_key or os.environ.get("LANGFUSE_SECRET_KEY", "")
+        pk = public_key or os.environ.get("LANGFUSE_PUBLIC_KEY") or settings.langfuse_public_key
+        sk = secret_key or os.environ.get("LANGFUSE_SECRET_KEY") or settings.langfuse_secret_key
         if not pk or not sk:
             raise ValueError("LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are not set")
         self._auth = base64.b64encode(f"{pk}:{sk}".encode()).decode()
