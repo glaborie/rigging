@@ -155,8 +155,16 @@ Deliberately not built (see [ADR-0017](docs/adr/0017-deliberate-non-goals.md)):
 agent long-term memory, multi-agent orchestration in v1, serving MCP, LLM-as-judge
 guardrails or evals, user auth before the service milestone, a web UI before v0.5,
 model fine-tuning, parallel tool execution, Windows-native support, a plugin
-marketplace.
+
+
+## Development TODO
+
+See [TODO.md](TODO.md) for ongoing skills development work including:
+- MLOps feature store parity debugging
+- Eval-driven routing architecture design  
+- ML pipeline CD pipeline implementation
+- Verification milestones for production readiness
 
 ## License
 
-MIT. See [`LICENSE`](LICENSE).
+MIT. See [LICENSE](LICENSE).
