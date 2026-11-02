@@ -11,11 +11,11 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.1 in progress. The loop, client, registry, event log, manifest
-and guardrail set are implemented and tested (27 tests, ruff + `mypy --strict`
-clean). Not yet run against a live gateway. Nothing past v0.1 exists beyond
-interfaces. The authoritative task list is `docs/milestones.md` — work from it,
-do not invent scope.
+Current state: v0.4 shipped (2026-10-29). v0.5 is in progress. The loop, 
+client, registry, event log, manifest, guardrails, retriever, Laya decision 
+model, MCP tools, OTel/Langfuse exporters and eval CLI are implemented and 
+tested (100 tests, ruff + `mypy --strict` clean). All four exit-criteria demos 
+verified live. v0.5 requires CLI recording and FastAPI web widget.
 
 ## Hard rules (violating these fails review)
 
@@ -96,8 +96,51 @@ uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see be
 The harness is gateway-agnostic; `RIGGING_BASE_URL` decides. Defaults assume an
 OpenAI-compatible endpoint on `:20128` (OmniRoute, `make gateway`) or Ollama's own
 `/v1` on `:11434`. Default model is `beam:cloud` (free at time of writing, needs
-`ollama signin`); `qwen3:8b` is the fully local fallback and **the demo must pass
-its eval suite on the weakest documented model**.
+`ollama signin`); `qwen3:8b` is the fully local fallback.
+
+### Quickstart options
+
+```bash
+# Option 1: replay (offline, no gateway needed)
+uv run harness run examples/hello/agent.yaml "hello" --replay examples/hello/transcript-codestral.jsonl
+
+# Option 2: OpenRouter (requires RIGGING_API_KEY)
+RIGGING_BASE_URL="https://openrouter.ai/api/v1" RIGGING_API_KEY=<your-key> \
+  uv run harness run examples/hello/agent.yaml "hello" --model "z-ai/glm-5.3-flashx-legal"
+
+# Option 3: OmniRoute with profile (requires API key)
+RIGGING_API_KEY=<omniroute-key> uv run harness run examples/hello/agent.yaml "hello" --model "auto/chat"
+```
+
+### Observability (Langfuse Cloud)
+
+There is **no local Langfuse stack** — `docker compose` runs only `omniroute`
+and, under `--profile retrieval`, `qdrant`. Traces go to Langfuse Cloud:
+
+```bash
+make observability              # checks LANGFUSE_* in .env — runs no agent, emits nothing
+make trace                      # runs the observability example, then reads the spans back
+make trace MODEL=qwen3:8b       # ...against host Ollama; no gateway container needed
+```
+
+`.env` needs `LANGFUSE_HOST` (defaults to `https://cloud.langfuse.com`),
+`LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. The keys are read through
+`Settings`, so `harness run` picks them up from `.env` — do not `source` the file
+first. Named credential profiles work the same way: `extra="allow"` keeps
+`RIGGING_PROFILE_<NAME>_BASE_URL/_API_KEY` from `.env` (real environment wins).
+The exporter resolves the host as
+`endpoint → env LANGFUSE_HOST → .env LANGFUSE_HOST → env LANGFUSE_BASE_URL → cloud
+default`; the OTLP path `/api/public/otel/v1/traces` is appended once. Exporters
+are closed on **every** exit path (ok, denied, budget_exhausted, output-deny) —
+a batch processor that is never flushed drops its spans.
+
+Neither `make check` nor `make observability` emits a span: the tests are offline
+by rule and the credential check runs no agent. `make trace` is the one command
+that proves the whole path — it writes a timestamp marker, runs the example, then
+polls `GET /api/public/v2/observations` until the spans show up (ingestion lags a
+few seconds; `GET /api/public/traces` is removed 2026-11-16). A self-hosted
+Langfuse v3 needs Postgres + ClickHouse + Redis and is deliberately not in the
+compose file.
 
 ## Definition of done
 
@@ -112,9 +155,9 @@ text claims something the code does not do.
 end-to-end runs through OmniRoute -> freellmapi -> codestral and beam:cloud, two-tool
 task complete, 30 tests green). v0.2 shipped (tag `v0.2.0`, release published). v0.3 shipped 2026-10-29:
 guardrails + approval live in the demo, fts5/qdrant retrievers, seeded fixture DB,
-`harness index`. All four exit-criteria demos verified live. v0.4 is next:
+`harness index`. All four exit-criteria demos verified live. v0.4 shipped 2026-10-29:
 OTel → Langfuse observability, eval CLI over recorded transcripts (`--replay`),
-MCP consumption.
+MCP consumption. v0.5 is next: 60-second terminal recording in README, FastAPI web widget.
 
 ## Things that will tempt you and are wrong here
 
