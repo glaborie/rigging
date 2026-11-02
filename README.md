@@ -53,7 +53,8 @@ a YAML file. Swapping Qdrant for anything else is one class.
 | Manifest JSON Schema + docs | -- | | | | | ● | |
 | Web widget (read-only, SSE) | extra | | | | | ● | |
 | Subagents (`SubagentRunner`) | manifest + protocol | | | | | | ● |
-| FastAPI service + auth | extra | | | | | | ● |
+| FastAPI service + auth (bearer) | extra | | | | | | ● |
+| Parallel tool execution (opt-in) | manifest flag | | | | | | ● |
 
 `●` shipped · `◐` stretch goal
 
@@ -153,7 +154,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
 
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
-- [`docs/adr/`](docs/adr/) — 20 decisions with the alternatives that were rejected
+- [`docs/adr/`](docs/adr/) — 22 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 
 ## Manifest schema

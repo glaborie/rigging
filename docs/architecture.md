@@ -226,6 +226,14 @@ Three properties are deliberate:
 The cost is stated in the ADR: read-only means no interactivity, and loopback
 with no auth means it is a development window, not a deployment.
 
+Auth (ADR-0021) is one bearer token, `RIGGING_SERVICE_TOKEN`, checked with
+`hmac.compare_digest` on every `/api/*` route. `GET /` stays public: it is static
+markup with no run data, and the page asks for the token when its first API call
+returns 401, keeping it in `sessionStorage`. The stream is consumed with
+`fetch` + `ReadableStream` rather than `EventSource`, because only the former can
+send a header — the token never appears in a URL. With no token configured,
+`harness serve` refuses any non-loopback bind instead of opening a port.
+
 ## 9. Subagents (v0.6, ADR-0019)
 
 A subagent is a child **run**, not a subprocess: same event log, same session,
@@ -252,3 +260,21 @@ Four rules make the tree debuggable rather than magical:
 
 A child that ends `denied`, `budget_exhausted` or `error` still returns a JSON
 summary — with `is_error` set, so the parent model sees the failure and can react.
+
+## 10. Parallel tool execution (v0.6, ADR-0022)
+
+Off by default. `parallel_tools: true` in the manifest changes one thing: the
+`tool.run` calls of a **single model response** run in a bounded thread pool
+(8 workers). The step is three phases:
+
+| Phase | Thread | Guarantee |
+|---|---|---|
+| prepare | main | `tool_call` event, span, `on_tool_call` guardrails, approval — all in declared order |
+| execute | pool | only approved calls; an exception becomes an `is_error` result |
+| finish | main | span end, `on_tool_result`, `tool_result` event, `tool` message — in declared order |
+
+Approval is deliberately serial: a consequential call must be decided before any
+tool starts, and two calls cannot race for one terminal prompt. The event log
+stays single-writer, so `seq` remains contiguous and the message list keeps the
+model's declared order even though completion order varies. A `tool_batch` event
+records the mode and the call names.
