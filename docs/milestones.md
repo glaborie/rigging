@@ -6,7 +6,7 @@ the first point at which a stranger can run it and understand it.
 **Current state (2026-11-02):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
 Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
 is complete; a live Clef-Flash classification run is the only pending evidence and
-waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5); v0.6 in progress (subagents done).
+waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5); v0.6 in progress (subagents and MLflow done).
 schema, entry-points, the architecture/ADR pass, the README recording and the
 read-only web widget. 108 tests, ruff + `mypy --strict` clean.
 
@@ -141,7 +141,15 @@ tools), all optional.
       `tests/test_subagents.py` (child in the same log, failed child, auto-deny,
       depth cap, usage accounting, missing manifest, name collision, redaction).
 - [ ] FastAPI service + auth (bearer keys or OIDC) designed as its own ADR
-- [ ] MLflow exporter as the second `Exporter`
+- [x] MLflow exporter as the second `Exporter`
+      ADR-0020. One rigging run per MLflow run over the `2.0` tracking REST API
+      (`runs/create`, `runs/log-batch`, `runs/update`), no SDK and no extra:
+      root span creates and finishes the run, child spans become metrics.
+      Required a loop fix: the root span is now ended on every exit path, so a
+      denied or exhausted run is `FAILED` rather than stuck `RUNNING`.
+      Verified live against `mlflow server` (SQLite backend): run `FINISHED`,
+      tags/params/metrics matching the harness run; 6 tests in
+      `tests/test_mlflow.py` use `httpx.MockTransport` (no server, no network).
 - [ ] parallel tool execution behind an opt-in flag
 
 ## Standing rules

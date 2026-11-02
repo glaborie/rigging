@@ -14,9 +14,9 @@ deliverable, and a reviewer's first five minutes matter as much as the tests.**
 Current state: v0.5 shipped (2026-11-02). The loop, client, registry, event log,
 manifest, guardrails, retriever, Laya decision model, MCP tools, OTel/Langfuse
 exporters, eval CLI and the read-only web view are implemented and tested
-(117 tests, ruff + `mypy --strict` clean). All four exit-criteria demos verified
-live. v0.6 is optional and in progress: subagents shipped; service auth, an
-MLflow exporter and parallel tool execution are open.
+(123 tests, ruff + `mypy --strict` clean). All four exit-criteria demos verified
+live. v0.6 is optional and in progress: subagents and the MLflow exporter
+shipped; service auth and parallel tool execution are open.
 
 ## Hard rules (violating these fails review)
 
