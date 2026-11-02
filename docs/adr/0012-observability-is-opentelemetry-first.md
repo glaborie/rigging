@@ -19,7 +19,8 @@ truth; spans are the distributed view.
 
 ## Consequences
 
-Two interchangeable backends with no vendor SDK in the loop, and span-level
+MLflow landed in v0.6 as a run-level backend over its REST API (ADR-0020): two
+interchangeable backends with no vendor SDK in the loop, and span-level
 attributes that already satisfy Langfuse's ingestion contract (verified previously
 against cloud.langfuse.com). Cost: `gen_ai.*` conventions are still moving, so
 attribute names are centralised in one module.

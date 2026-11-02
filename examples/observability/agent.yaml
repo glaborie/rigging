@@ -7,6 +7,7 @@ model: freellm/codestral
 credential_profile: ollama
 system_prompt: You are a terse assistant. Answer in one sentence.
 observability:
+  # Swap in `mlflow` (ADR-0020) or `console` without touching the loop.
   exporters: [langfuse]
   capture_content: true
 limits:

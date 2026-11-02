@@ -47,6 +47,7 @@ a YAML file. Swapping Qdrant for anything else is one class.
 | Retrieval (Qdrant default, FTS5 reference) | decorator | | | ● | | | |
 | Laya decision model (advisory) | decorator | | | ● | | | |
 | OTel → Langfuse exporters | core | | | | ● | | |
+| MLflow exporter (one run per run, no SDK) | core | | | | | | ● |
 | `harness eval` | core | | | | ● | | |
 | MCP servers as a tool source | entry point | | | | ● | | |
 | Manifest JSON Schema + docs | -- | | | | | ● | |
@@ -152,7 +153,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
 
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
-- [`docs/adr/`](docs/adr/) — 19 decisions with the alternatives that were rejected
+- [`docs/adr/`](docs/adr/) — 20 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 
 ## Manifest schema

@@ -60,6 +60,10 @@ class Settings(BaseSettings):
     # observability
     otlp_endpoint: str = ""
     otlp_headers: str = ""
+    # MLflow exporter (ADR-0020): the tracking server is HTTP, so no SDK is needed.
+    mlflow_tracking_uri: str = Field(default="", validation_alias="MLFLOW_TRACKING_URI")
+    mlflow_experiment_id: str = Field(default="0", validation_alias="MLFLOW_EXPERIMENT_ID")
+    mlflow_tracking_token: str = Field(default="", validation_alias="MLFLOW_TRACKING_TOKEN")
 
     def profile(self, name: str = "default") -> Profile:
         """Named profiles come from RIGGING_PROFILE_<NAME>_BASE_URL / _API_KEY.

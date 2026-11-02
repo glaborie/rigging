@@ -48,7 +48,7 @@ that claim seriously: the loop knows about protocols, never about vendors.
 | `ApprovalPolicy` | `request(tool, args, context) -> Approve | Deny` | CLI prompt, scripted (tests) | v0.3 |
 | `Retriever` | `search(query, k) -> list[Chunk]`, `requires_indexing` | Qdrant (default), FTS5 (reference) | v0.3 |
 | `DecisionModel` | `decide(state, questions) -> typed answers + probabilities` | Laya (advisory) | v0.3 |
-| `Exporter` | `span(name, attrs)`, `event(...)` with `gen_ai.*` attrs | OTel→Langfuse, MLflow | v0.4 / v0.6 |
+| `Exporter` | `span(name, attrs)`, `event(...)` with `gen_ai.*` attrs | OTel→Langfuse, MLflow (run-level), console | v0.4 / v0.6 |
 | `SubagentRunner` | `spawn(spec, task) -> SubagentResult` | not implemented | v0.6 |
 
 Every protocol is defined in `rigging/protocols.py`, one screen each, with no
@@ -138,6 +138,18 @@ Spans follow OTel `gen_ai.*` conventions so any backend works:
 
 Langfuse is the first OTLP target, MLflow the second. Both are `Exporter`
 implementations; neither is imported by the loop.
+
+The two backends see different shapes, on purpose (ADR-0020). Langfuse ingests
+spans. MLflow tracks runs, so `MLflowExporter` maps one rigging run to one MLflow
+run: the root span creates it, child spans are aggregated into metrics
+(`gen_ai.usage.*`, `rigging.steps`, `rigging.chat_calls`, `rigging.tool_calls`,
+`rigging.latency_s`, `rigging.cost_usd`), and the root span ends it `FINISHED` or
+`FAILED`. It speaks MLflow's `2.0` tracking REST API over `httpx`, so there is no
+`mlflow` dependency and no extra to install.
+
+For that to be honest, the loop ends the root span on **every** exit path — `ok`,
+`denied`, `budget_exhausted` and output-deny — with `rigging.status` set. A
+run-level backend cannot infer a status it is never told.
 
 ## 6. Failure semantics
 

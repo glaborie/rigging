@@ -152,11 +152,9 @@
         "exporters": {
           "type": "array",
           "items": {
-            "enum": [
-              "langfuse",
-              "mlflow",
-              "console"
-            ]
+            "type": "string",
+            "pattern": "^(console|langfuse|mlflow)(:[a-z_]+=[^,]*)?$",
+            "description": "Registered exporter name, optionally with `:key=value,key=value` options."
           },
           "default": []
         },
