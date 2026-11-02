@@ -3,10 +3,32 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-10-29):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
+**Current state (2026-11-02):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
 Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
 is complete; a live Clef-Flash classification run is the only pending evidence and
-waits on Cloudflare's daily free quota reset. v0.5 is next.
+waits on Cloudflare's daily free quota reset. v0.5 is in progress: schema,
+entry-points and the architecture/ADR pass are done (3 of 5), the README recording
+and the widget are open. 100 tests, ruff + `mypy --strict` clean.
+
+**Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
+repo is operated, so it is recorded here:
+
+- **Langfuse Cloud replaces the self-hosted stack.** The `observability` compose
+  profile (Langfuse v3 + Postgres + ClickHouse + Redis) never started cleanly and
+  was dropped. `docker compose` now runs `omniroute` and, under `--profile
+  retrieval`, `qdrant`. Traces go to `cloud.langfuse.com`.
+- **`.env` is authoritative.** `LANGFUSE_HOST/_PUBLIC_KEY/_SECRET_KEY` and the
+  `RIGGING_PROFILE_<NAME>_*` credential profiles are read through `Settings`
+  (`extra="allow"`), so `harness run` needs no exported shell variables; the real
+  environment still wins over `.env`.
+- **`credential_profile` is honoured.** The loop had been building its client from
+  the default gateway and ignoring the manifest's profile.
+- **Spans flush on every exit path.** Exporters close on `ok`, `denied`,
+  `budget_exhausted` and output-deny; previously only the ok path closed them, so
+  other runs buffered their spans and exited silently.
+- **`make trace` is the proof.** `make check` and `make observability` emit no
+  spans by design; `make trace` runs the example and polls
+  `GET /api/public/v2/observations` until they land.
 
 ## v0.1 — the loop is real
 
@@ -91,7 +113,18 @@ Version bumped to 0.4.0.
 - [x] entry-points discovery on by default, with a documented third-party example
 - [x] `docs/architecture.md` final, ADRs complete, writeup published
 - [ ] 60-second terminal recording in the README
+      **Open (2026-11-02).** No demo asset exists yet (`README.md` has no
+      asciinema/gif reference). Needs a real run, not a mock: `make hello` plus
+      `make trace` would show the loop, a guardrail decision and a span landing in
+      Langfuse in one take.
 - [ ] stretch: FastAPI + SSE web widget reading the same SQLite sessions
+      **Open, and blocked on an ADR.** ADR-0017 makes a web UI a v0.5 non-goal
+      until this milestone, and hard rule 6 requires a numbered ADR (protocol,
+      auth model, how the widget reads `run_events` without a second source of
+      truth) before any code.
+
+**v0.5 status: 3 of 5.** Core work is done and green; what remains is evidence
+(the recording) and one designed-for stretch goal.
 
 ## v0.6 — scale-out (optional)
 
