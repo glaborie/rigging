@@ -234,10 +234,26 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     if approval is not None:
         agent.approval = approval
 
+    # The root span is created after the input guardrail, so a holder keeps the
+    # helper below usable on the earliest exit path too.
+    root: dict[str, Any] = {"span": None, "ended": False}
+
     def _close_and(result: RunResult) -> RunResult:
-        """Flush every exporter on every exit path. A batch processor that is never
-        shut down drops its spans when the CLI exits, so a denied or exhausted run
-        would leave no trace at all."""
+        """End the root span and flush every exporter on every exit path.
+
+        A batch processor that is never shut down drops its spans when the CLI
+        exits, and a run-level backend (MLflow) leaves the run RUNNING forever if
+        the root span is never ended. Denied and exhausted runs produced spans too.
+        """
+        if root["span"] is not None and not root["ended"]:
+            _end_span(agent, root["span"], {
+                "rigging.status": result.status,
+                "rigging.steps": result.steps,
+                "gen_ai.usage.input_tokens": result.usage.input_tokens,
+                "gen_ai.usage.output_tokens": result.usage.output_tokens,
+                "rigging.cost_usd": result.cost_usd,
+            })
+            root["ended"] = True
         for exporter in agent.exporters:
             try:
                 exporter.close()
@@ -292,7 +308,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     wire = [t.json_schema for t in agent.tools]
     usage = Usage()
     started = time.perf_counter()
-    root_span = _span(agent, "invoke_agent", {
+    root["span"] = root_span = _span(agent, "invoke_agent", {
         "gen_ai.operation.name": "invoke_agent",
         "gen_ai.system": agent.client.name if hasattr(agent.client, "name") else "openai",
         "gen_ai.request.model": spec.model,
@@ -376,7 +392,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.status": "ok",
         "rigging.steps": step,
         "rigging.handoff": bool(agent.handoff),
+        "rigging.cost_usd": agent.prices.cost(spec.model, usage),
     })
+    root["ended"] = True
     log.append(run_id, "run_finished", {"status": "ok", "content_chars": len(output)})
     log.finish_run(run_id, "ok")
     if owns_log:

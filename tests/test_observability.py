@@ -126,6 +126,10 @@ def test_exporters_close_when_the_output_is_denied(tmp_path, monkeypatch):
 
     assert result.status == "denied"
     assert exporter.closed is True
+    # The root span must be *ended*, not just flushed: a run-level backend would
+    # otherwise leave the run RUNNING forever.
+    assert exporter.ended[-1][0] == "invoke_agent"
+    assert exporter.ended[-1][1]["rigging.status"] == "denied"
 
 
 def test_exporters_close_when_the_budget_is_exhausted(tmp_path, monkeypatch):
@@ -143,6 +147,8 @@ def test_exporters_close_when_the_budget_is_exhausted(tmp_path, monkeypatch):
 
     assert result.status == "budget_exhausted"
     assert exporter.closed is True
+    assert exporter.ended[-1][0] == "invoke_agent"
+    assert exporter.ended[-1][1]["rigging.status"] == "budget_exhausted"
 
 def test_eval_predicates_over_the_event_log(tmp_path, monkeypatch):
     import rigging.eval as eval_mod
