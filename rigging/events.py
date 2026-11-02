@@ -28,6 +28,7 @@ EventType = Literal[
     "reasoning_delta",
     "model_response",
     "tool_call",
+    "tool_batch",
     "approval_requested",
     "approval_verdict",
     "tool_result",

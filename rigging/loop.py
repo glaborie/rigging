@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable, Sequence
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -359,8 +360,11 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         if not response.tool_calls:
             break
 
-        for call in response.tool_calls:
-            messages.append(_execute_call(call, tools, agent, log, run_id))
+        if spec.parallel_tools and len(response.tool_calls) > 1:
+            messages.extend(_execute_calls_parallel(response.tool_calls, tools, agent, log, run_id))
+        else:
+            for call in response.tool_calls:
+                messages.append(_execute_call(call, tools, agent, log, run_id))
 
     else:
         exhausted = "max_steps"
@@ -443,7 +447,26 @@ def _streaming_call(agent: Assembled, request: ModelRequest, log: EventLog, run_
     )
 
 
-def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog, run_id: str) -> Message:
+@dataclass
+class _CallJob:
+    """One prepared tool call: checked, approved, not yet run."""
+
+    call: ToolCall
+    tool: Any
+    span: Any
+
+
+def _run_tool(tool: Any, call: ToolCall) -> ToolResult:
+    """Hard rule 3 for third-party Tool implementations too, not just FunctionTool."""
+    try:
+        return tool.run(call)  # type: ignore[no-any-return]
+    except Exception as exc:
+        return ToolResult.error(call, f"{type(exc).__name__}: {exc}")
+
+
+def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog,
+                  run_id: str) -> tuple[_CallJob, ToolResult | None]:
+    """Everything that must happen serially: event, span, guardrails, approval."""
     log.append(run_id, "tool_call", call.model_dump())
     tool_span = _span(agent, "execute_tool", {
         "gen_ai.operation.name": "execute_tool",
@@ -451,38 +474,86 @@ def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
         "rigging.tool.side_effecting": bool(getattr(tools.get(call.name), "side_effecting", False)),
     })
     tool = tools.get(call.name)
+    job = _CallJob(call=call, tool=tool, span=tool_span)
     if tool is None:
-        result = ToolResult.error(call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
-    else:
-        verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
-        log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name, "checks": notes})
-        if isinstance(verdict, Deny):
-            result = ToolResult.error(call, f"denied by guardrail: {verdict.reason}", denied=True)
-        else:
-            args = verdict.value if isinstance(verdict, Transform) else call.arguments
-            if isinstance(args, dict) and args != call.arguments:
-                call = call.model_copy(update={"arguments": args})
-            if getattr(tool, "side_effecting", False):
-                log.append(run_id, "approval_requested", {"tool": call.name, "arguments": call.arguments})
-                approved, note = agent.approval.request(call, tool, "side-effecting tool")
-                log.append(run_id, "approval_verdict", {"tool": call.name, "approved": approved, "note": note})
-                result = (tool.run(call) if approved
-                          else ToolResult.error(call, f"denied by approval policy: {note}", denied=True))
-            else:
-                result = tool.run(call)
+        return job, ToolResult.error(
+            call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
 
-    _end_span(agent, tool_span, {"rigging.tool.denied": result.denied,
-                                 "rigging.tool.is_error": result.is_error})
-    if call.name == "escalate_to_human" and not result.is_error:
+    verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
+    log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name,
+                                             "checks": notes})
+    if isinstance(verdict, Deny):
+        return job, ToolResult.error(call, f"denied by guardrail: {verdict.reason}", denied=True)
+
+    args = verdict.value if isinstance(verdict, Transform) else call.arguments
+    if isinstance(args, dict) and args != call.arguments:
+        job.call = call = call.model_copy(update={"arguments": args})
+    if getattr(tool, "side_effecting", False):
+        log.append(run_id, "approval_requested", {"tool": call.name, "arguments": call.arguments})
+        approved, note = agent.approval.request(call, tool, "side-effecting tool")
+        log.append(run_id, "approval_verdict", {"tool": call.name, "approved": approved,
+                                                "note": note})
+        if not approved:
+            return job, ToolResult.error(
+                call, f"denied by approval policy: {note}", denied=True)
+    return job, None
+
+
+def _finish_call(job: _CallJob, result: ToolResult, agent: Assembled, log: EventLog,
+                 run_id: str) -> Message:
+    """Everything that must stay on the main thread: spans, handoff, events, message."""
+    _end_span(agent, job.span, {"rigging.tool.denied": result.denied,
+                                "rigging.tool.is_error": result.is_error})
+    if job.call.name == "escalate_to_human" and not result.is_error:
         _capture_handoff(agent, result.content, log, run_id)
 
-    verdict, notes = _apply("on_tool_result", agent.guardrails["on_tool_result"], call, result.content)
+    verdict, _notes = _apply("on_tool_result", agent.guardrails["on_tool_result"],
+                             job.call, result.content)
     if isinstance(verdict, Transform):
         result = result.model_copy(update={"content": verdict.value})
     log.append(run_id, "tool_result", {"call_id": result.call_id, "name": result.name,
                                        "content": result.content, "is_error": result.is_error,
                                        "denied": result.denied, "duration_ms": result.duration_ms})
-    return Message(role="tool", tool_call_id=result.call_id, name=result.name, content=result.content)
+    return Message(role="tool", tool_call_id=result.call_id, name=result.name,
+                   content=result.content)
+
+
+def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog,
+                  run_id: str) -> Message:
+    job, early = _prepare_call(call, tools, agent, log, run_id)
+    result = early if early is not None else _run_tool(job.tool, job.call)
+    return _finish_call(job, result, agent, log, run_id)
+
+
+def _execute_calls_parallel(calls: list[ToolCall], tools: dict[str, Any], agent: Assembled,
+                            log: EventLog, run_id: str, max_workers: int = 8) -> list[Message]:
+    """Prepare serially, run concurrently, finish serially (ADR-0022).
+
+    Approvals happen before any tool starts, so a consequential call cannot race
+    another for one decision. Events and messages stay in declared order, so the
+    log's `seq` is deterministic even though completion is not.
+    """
+    log.append(run_id, "tool_batch", {"parallel": True, "calls": [c.name for c in calls]})
+    jobs: list[_CallJob] = []
+    results: list[ToolResult | None] = []
+    for call in calls:
+        job, early = _prepare_call(call, tools, agent, log, run_id)
+        jobs.append(job)
+        results.append(early)
+
+    runnable = [(index, job) for index, job in enumerate(jobs) if results[index] is None]
+    if runnable:
+        with ThreadPoolExecutor(max_workers=min(max_workers, len(runnable))) as pool:
+            futures = {pool.submit(_run_tool, job.tool, job.call): index
+                       for index, job in runnable}
+            for future, index in futures.items():
+                results[index] = future.result()
+
+    return [
+        _finish_call(job, result, agent, log, run_id)
+        for job, result in zip(jobs, results, strict=True)
+        if result is not None
+    ]
 
 
 def _capture_handoff(agent: Assembled, content: str, log: EventLog, run_id: str) -> None:

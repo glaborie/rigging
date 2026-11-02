@@ -93,6 +93,9 @@ class AgentSpec(BaseModel):
     observability: ObservabilityCfg = Field(default_factory=ObservabilityCfg)
     mcp_servers: list[McpServerCfg] = Field(default_factory=list)
     subagents: list[SubagentCfg] = Field(default_factory=list)
+    # Opt-in (ADR-0022): independent tool calls in one model response run in a
+    # bounded thread pool. Only set it for tools you know are thread-safe.
+    parallel_tools: bool = False
 
     # provenance, not authorable
     source_path: str = ""

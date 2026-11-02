@@ -235,6 +235,11 @@
           }
         }
       }
+    },
+    "parallel_tools": {
+      "type": "boolean",
+      "default": false,
+      "description": "Run independent tool calls from one model response concurrently (ADR-0022)."
     }
   },
   "$defs": {
