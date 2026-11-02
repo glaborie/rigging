@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     request_timeout_s: float = 120.0
     max_retries: int = 3
 
+    # web view auth (ADR-0021): comma-separated to allow rotation. Empty means no
+    # auth, which `harness serve` only allows on a loopback bind.
+    service_token: str = Field(default="", validation_alias="RIGGING_SERVICE_TOKEN")
+
     # subagents (ADR-0019): how deep spawn_* tools may nest. Enforced at runtime,
     # not per manifest, so a manifest cannot promote itself.
     subagent_max_depth: int = 1

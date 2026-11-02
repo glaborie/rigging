@@ -105,3 +105,55 @@ def test_the_service_never_writes(tmp_path):
 def test_missing_database_is_refused(tmp_path):
     with pytest.raises(FileNotFoundError, match="no event log"):
         create_app(tmp_path / "absent.db")
+
+
+# ------------------------------------------------------------------- auth (ADR-0021)
+
+def test_the_shell_is_public_but_the_data_is_not(tmp_path):
+    log, run_id = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens=["secret"]))
+
+    assert client.get("/").status_code == 200, "the page must load so it can ask for a token"
+    assert client.get("/api/runs").status_code == 401
+    assert client.get(f"/api/runs/{run_id}").status_code == 401
+    assert client.get(f"/api/runs/{run_id}/stream").status_code == 401
+    assert client.get("/api/runs").headers["www-authenticate"] == "Bearer"
+
+
+def test_a_valid_bearer_token_is_accepted(tmp_path):
+    log, run_id = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens=["secret"]))
+    headers = {"Authorization": "Bearer secret"}
+
+    assert client.get("/api/runs", headers=headers).status_code == 200
+    assert client.get(f"/api/runs/{run_id}", headers=headers).status_code == 200
+    stream = client.get(f"/api/runs/{run_id}/stream", headers=headers)
+    assert stream.status_code == 200 and "event: end" in stream.text
+
+
+def test_a_wrong_token_is_rejected(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens=["secret"]))
+    assert client.get("/api/runs", headers={"Authorization": "Bearer nope"}).status_code == 401
+    assert client.get("/api/runs", headers={"Authorization": "secret"}).status_code == 401
+
+
+def test_tokens_rotate_by_comma(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens="old, new"))
+    for token in ("old", "new"):
+        assert client.get("/api/runs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+
+
+def test_no_token_means_no_auth_on_loopback(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    assert TestClient(create_app(log.path)).get("/api/runs").status_code == 200
+
+
+def test_exposing_the_service_without_a_token_is_refused():
+    from rigging.service import check_bind
+
+    with pytest.raises(ValueError, match="RIGGING_SERVICE_TOKEN"):
+        check_bind("0.0.0.0", [])
+    check_bind("127.0.0.1", [])
+    check_bind("0.0.0.0", ["secret"])

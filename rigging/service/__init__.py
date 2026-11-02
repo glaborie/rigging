@@ -4,6 +4,6 @@ Needs `rigging[service]`; importing this package without it raises
 `ModuleNotFoundError: fastapi`, which `harness serve` turns into an install hint.
 """
 
-from rigging.service.app import create_app
+from rigging.service.app import check_bind, create_app
 
-__all__ = ["create_app"]
+__all__ = ["check_bind", "create_app"]

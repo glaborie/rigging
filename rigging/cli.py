@@ -261,7 +261,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     try:
-        from rigging.service import create_app
+        from rigging.service import check_bind, create_app
     except ModuleNotFoundError:
         print("`harness serve` needs the [service] extra: uv sync --extra service",
               file=sys.stderr)
@@ -272,8 +272,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not pathlib.Path(db).exists():
         print(f"no event log at {db} — run an agent first", file=sys.stderr)
         return 2
+    tokens = [t.strip() for t in settings.service_token.split(",") if t.strip()]
+    try:
+        check_bind(args.host, tokens)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 2
     print(f"rigging runs: http://{args.host}:{args.port}  (read-only, db={db})")
-    uvicorn.run(create_app(db), host=args.host, port=args.port, log_level="warning")
+    print(f"auth: {'bearer token' if tokens else 'none — loopback only (ADR-0021)'}")
+    uvicorn.run(create_app(db, tokens=tokens), host=args.host, port=args.port,
+                log_level="warning")
     return 0
 
 

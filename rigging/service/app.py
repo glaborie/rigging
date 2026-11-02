@@ -7,15 +7,16 @@ Needs `rigging[service]`; `harness serve` prints the install hint without it.
 
 from __future__ import annotations
 
+import hmac
 import json
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 #: How often the SSE generator re-reads the log while a run is in flight.
@@ -109,29 +110,71 @@ def _tail(db: str | Path, run_id: str, idle_seconds: float, max_seconds: float) 
         time.sleep(POLL_INTERVAL_S)
 
 
+LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+
+
+def check_bind(host: str, tokens: Sequence[str]) -> None:
+    """Refuse to expose the service without a token (ADR-0021)."""
+    if tokens or host in LOOPBACK_HOSTS:
+        return
+    raise ValueError(
+        f"refusing to bind {host!r} without RIGGING_SERVICE_TOKEN: the web view "
+        "serves full run transcripts. Set a token, or bind 127.0.0.1."
+    )
+
+
+def _auth_dependency(tokens: tuple[str, ...]) -> Any:
+    def require_bearer(request: Request) -> None:
+        if not tokens:
+            return
+        scheme, _, value = request.headers.get("authorization", "").partition(" ")
+        valid = scheme.lower() == "bearer" and any(
+            hmac.compare_digest(value, token) for token in tokens
+        )
+        if not valid:
+            raise HTTPException(
+                status_code=401,
+                detail="missing or invalid bearer token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+
+    return require_bearer
+
+
 def create_app(db: str | Path, *, idle_seconds: float = 20.0,
-               max_seconds: float = 600.0) -> FastAPI:
-    """Build the app around one SQLite event log."""
+               max_seconds: float = 600.0,
+               tokens: Sequence[str] | str | None = None) -> FastAPI:
+    """Build the app around one SQLite event log.
+
+    `tokens` guards every `/api/*` route; the HTML shell stays public so the page
+    can ask for the token (ADR-0021). Empty tokens means no auth — only valid for
+    a loopback bind, which `harness serve` enforces.
+    """
     if not Path(db).exists():
         raise FileNotFoundError(f"no event log at {db} — run an agent first")
+    if isinstance(tokens, str):
+        tokens = [t.strip() for t in tokens.split(",") if t.strip()]
+    token_tuple = tuple(tokens or ())
+    auth = [Depends(_auth_dependency(token_tuple))]
+
     app = FastAPI(title="rigging", docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.get("/", response_class=HTMLResponse)
     def index() -> str:
         return INDEX_HTML
 
-    @app.get("/api/runs")
+    @app.get("/api/runs", dependencies=auth)
     def list_runs(limit: int = 20) -> dict[str, Any]:
         return {"runs": runs(db, max(1, min(limit, 100)))}
 
-    @app.get("/api/runs/{run_id}")
+    @app.get("/api/runs/{run_id}", dependencies=auth)
     def get_run(run_id: str) -> dict[str, Any]:
         row = run(db, run_id)
         if row is None:
             raise HTTPException(status_code=404, detail="no such run")
         return {"run": row, "events": events(db, run_id)}
 
-    @app.get("/api/runs/{run_id}/stream")
+    @app.get("/api/runs/{run_id}/stream", dependencies=auth)
     def stream(run_id: str, idle: float | None = None,
                timeout: float | None = None) -> StreamingResponse:
         if run(db, run_id) is None:
@@ -194,7 +237,24 @@ INDEX_HTML = """<!doctype html>
 const runsEl = document.getElementById('runs');
 const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
-let source = null, current = null;
+let token = sessionStorage.getItem('rigging.token') || '';
+let streamController = null, current = null;
+
+const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
+
+// The shell is public, the data is not (ADR-0021). On the first 401, ask for the
+// token and keep it in sessionStorage — never in the URL, never in a log.
+async function api(path) {
+  let res = await fetch(path, { headers: authHeaders() });
+  if (res.status === 401) {
+    const entered = prompt('Bearer token for this rigging service (RIGGING_SERVICE_TOKEN):');
+    if (!entered) throw new Error('unauthorized');
+    token = entered.trim();
+    sessionStorage.setItem('rigging.token', token);
+    res = await fetch(path, { headers: authHeaders() });
+  }
+  return res;
+}
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
   (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -206,7 +266,12 @@ function pill(status) {
 }
 
 async function loadRuns() {
-  const res = await fetch('/api/runs?limit=50');
+  let res;
+  try { res = await api('/api/runs?limit=50'); } catch { return; }
+  if (!res.ok) {
+    runsEl.innerHTML = '<p class="empty">unauthorized — reload the page and enter the token</p>';
+    return;
+  }
   const { runs } = await res.json();
   if (!runs.length) {
     runsEl.innerHTML = '<p class="empty">no runs yet — run <code>make hello</code></p>';
@@ -248,9 +313,9 @@ function openRun(runId) {
                              : el.removeAttribute('aria-current'));
   logEl.replaceChildren();
   metaEl.innerHTML = `<span>${esc(runId)}</span>`;
-  if (source) source.close();
+  if (streamController) streamController.abort();
 
-  fetch(`/api/runs/${runId}`).then((r) => r.json()).then(({ run }) => {
+  api(`/api/runs/${runId}`).then((r) => r.json()).then(({ run }) => {
     metaEl.innerHTML = `<span>${esc(run.run_id)}</span>
       ${run.parent_run_id ? `<span>child of ${esc(run.parent_run_id)}</span>` : ''}
       <span>${esc(run.model || '')}</span>
@@ -259,14 +324,51 @@ function openRun(runId) {
       <span>started ${new Date(run.started_at * 1000).toLocaleString()}</span>`;
   });
 
-  source = new EventSource(`/api/runs/${runId}/stream`);
-  source.onmessage = (m) => {
-    const ev = JSON.parse(m.data);
-    logEl.append(render(ev));
+  streamRun(runId);
+}
+
+// SSE over fetch, not EventSource: a header is possible here, a query token is not.
+async function streamRun(runId) {
+  streamController = new AbortController();
+  const signal = streamController.signal;
+  let res;
+  try { res = await api(`/api/runs/${runId}/stream`); } catch { return; }
+  if (!res.ok || !res.body) return;
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let cut;
+      while ((cut = buffer.indexOf('\n\n')) >= 0) {
+        const frame = buffer.slice(0, cut);
+        buffer = buffer.slice(cut + 2);
+        if (!handleFrame(frame)) return;
+      }
+    }
+  } catch (err) {
+    if (signal.aborted) return;  // a new run was selected
+    throw err;
+  }
+}
+
+function handleFrame(frame) {
+  let event = 'message';
+  const data = [];
+  for (const line of frame.split('\n')) {
+    if (line.startsWith('event: ')) event = line.slice(7).trim();
+    else if (line.startsWith('data: ')) data.push(line.slice(6));
+  }
+  if (event === 'end') { loadRuns(); return false; }
+  if (data.length) {
+    logEl.append(render(JSON.parse(data.join('\n'))));
     logEl.scrollTop = logEl.scrollHeight;
-  };
-  source.addEventListener('end', () => { source.close(); loadRuns(); });
-  source.onerror = () => { /* EventSource retries; the generator says why it ended */ };
+  }
+  return true;
 }
 
 loadRuns();
