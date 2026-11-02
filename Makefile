@@ -24,7 +24,7 @@ APPROVE  ?= 0
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean
+        retrieval hello demo run chat index eval up down logs clean trace
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -42,7 +42,9 @@ help: ## show this help
 	@printf '\nCompose profiles:\n'
 	@printf '  (default)      omniroute only — smallest footprint, enough to run an agent\n'
 	@printf '  retrieval      + qdrant on :6345 (6333/6335/6340 are taken by other stacks)\n'
-	@printf '  observability  + langfuse and postgres on :3000, for traces\n'
+	@printf '\nTraces go to Langfuse Cloud: set LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY in .env.\n'
+	@printf '  make observability       check those keys (runs no agent, emits nothing)\n'
+	@printf '  make trace               run the example, then print the spans it produced\n'
 	@printf '\nFirst run: make install && make gateway && make hello\n\n'
 
 install: ## create the venv with dev extras
@@ -77,9 +79,20 @@ gateway: ## start OmniRoute (OpenAI-compatible, :20128)
 retrieval: ## gateway + Qdrant on :6345 (v0.3 index target)
 	docker compose --profile retrieval up -d
 
-observability: ## gateway + Qdrant + Langfuse (:3000) + Postgres (v0.4 traces)
-	docker compose --profile retrieval --profile observability up -d
-	@printf 'langfuse: http://localhost:3000  (create an account, then set RIGGING_OTLP_* in .env)\n'
+observability: ## check the Langfuse Cloud credentials in .env (emits nothing)
+	@test -f .env || { printf 'no .env — copy .env.example and fill LANGFUSE_* first\n'; exit 1; }
+	@set -a; . ./.env; set +a; \
+	 if [ -z "$$LANGFUSE_PUBLIC_KEY" ] || [ -z "$$LANGFUSE_SECRET_KEY" ]; then \
+	   printf 'LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are empty in .env\n'; exit 1; fi; \
+	 printf 'langfuse cloud: %s\n' "$${LANGFUSE_HOST:-https://cloud.langfuse.com}"; \
+	 printf 'credentials look set. this target runs no agent, so it emits no spans.\n'; \
+	 printf 'next: make trace  (runs the observability example, then reads the spans back)\n'
+
+trace: ## run the observability example, then read its spans back from Langfuse Cloud
+	@marker="$${TMPDIR:-/tmp}/rigging-trace-marker"; rm -f "$$marker"; touch "$$marker"; \
+	 uv run harness run examples/observability/agent.yaml "$(PROMPT)" \
+	   $(if $(MODEL),--model $(MODEL),) || exit $$?; \
+	 uv run python scripts/langfuse_tail.py --since-file "$$marker" --wait 90
 
 hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples/hello/)
 	RIGGING_BASE_URL=$${RIGGING_BASE_URL:-http://localhost:20128/v1} \
