@@ -11,11 +11,11 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.4 shipped (2026-10-29). v0.5 is in progress. The loop, 
-client, registry, event log, manifest, guardrails, retriever, Laya decision 
-model, MCP tools, OTel/Langfuse exporters and eval CLI are implemented and 
-tested (100 tests, ruff + `mypy --strict` clean). All four exit-criteria demos 
-verified live. v0.5 requires CLI recording and FastAPI web widget.
+Current state: v0.5 shipped (2026-11-02). The loop, client, registry, event log,
+manifest, guardrails, retriever, Laya decision model, MCP tools, OTel/Langfuse
+exporters, eval CLI and the read-only web view are implemented and tested
+(108 tests, ruff + `mypy --strict` clean). All four exit-criteria demos verified
+live. v0.6 is optional: subagents, service auth, MLflow, parallel tools.
 
 ## Hard rules (violating these fails review)
 
@@ -38,7 +38,8 @@ verified live. v0.5 requires CLI recording and FastAPI web widget.
    alternatives rejected). One page, honest about costs.
 7. **No new dependency without justification.** Core deps are `httpx`,
    `pydantic`, `pydantic-settings`, `pyyaml`. Everything heavier goes behind an
-   extra (`[qdrant]`, `[laya]`, `[langfuse]`, `[mcp]`, `[service]`).
+   extra (`[qdrant]`, `[laya]`, `[langfuse]`, `[mcp]`, `[service]`). The widget is
+   `[service]`, and `make install` pulls it so `make check` exercises it.
 8. **No LLM-as-judge** in guardrails or evals (ADR-0009, ADR-0017).
 9. **No silent feature: the CLI says what is not built.** Unimplemented commands
    print the milestone and exit 2.
@@ -62,7 +63,8 @@ rigging/
   retriever/        fts5 (works), qdrant (v0.3 stub)
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations
-  cli.py            harness run|schema|tools|chat|index|eval
+  service/          read-only FastAPI + SSE view of the event log (ADR-0018)
+  cli.py            harness run|schema|tools|chat|index|eval|calibrate|serve
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered

@@ -6,9 +6,9 @@ the first point at which a stranger can run it and understand it.
 **Current state (2026-11-02):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
 Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
 is complete; a live Clef-Flash classification run is the only pending evidence and
-waits on Cloudflare's daily free quota reset. v0.5 is in progress: schema,
-entry-points and the architecture/ADR pass are done (3 of 5), the README recording
-and the widget are open. 100 tests, ruff + `mypy --strict` clean.
+waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5):
+schema, entry-points, the architecture/ADR pass, the README recording and the
+read-only web widget. 108 tests, ruff + `mypy --strict` clean.
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
 repo is operated, so it is recorded here:
@@ -112,19 +112,22 @@ Version bumped to 0.4.0.
 - [x] manifest JSON Schema published + `harness schema` documented
 - [x] entry-points discovery on by default, with a documented third-party example
 - [x] `docs/architecture.md` final, ADRs complete, writeup published
-- [ ] 60-second terminal recording in the README
-      **Open (2026-11-02).** No demo asset exists yet (`README.md` has no
-      asciinema/gif reference). Needs a real run, not a mock: `make hello` plus
-      `make trace` would show the loop, a guardrail decision and a span landing in
-      Langfuse in one take.
-- [ ] stretch: FastAPI + SSE web widget reading the same SQLite sessions
-      **Open, and blocked on an ADR.** ADR-0017 makes a web UI a v0.5 non-goal
-      until this milestone, and hard rule 6 requires a numbered ADR (protocol,
-      auth model, how the widget reads `run_events` without a second source of
-      truth) before any code.
+- [x] 60-second terminal recording in the README
+      `scripts/demo.sh` is the script; `scripts/record_demo.py` records it in a
+      real pty to `docs/demo.cast` (asciinema v2, replayable), and
+      `scripts/cast_to_gif.py` renders `docs/demo.gif` with ffmpeg. `make record`
+      regenerates both. The take is live: host Ollama, seeded demo database, a
+      scratch event log — tools, a guarded refund run, then the event trail.
+- [x] stretch: FastAPI + SSE web widget reading the same SQLite sessions
+      `rigging/service/` behind `[service]`, ADR-0018: read-only by construction
+      (SQLite `mode=ro`), no second store, SSE tailing `run_events` by `seq`,
+      one HTML page with no build step, loopback only. `make serve`; 8 tests
+      cover the routes, the SSE replay, the idle cutoff, 404s and the no-write
+      guarantee.
 
-**v0.5 status: 3 of 5.** Core work is done and green; what remains is evidence
-(the recording) and one designed-for stretch goal.
+**v0.5 status: DONE (2026-11-02).** All five boxes ticked. Version 0.5.0.
+Remaining work in the plan is v0.6 (subagents, service auth, MLflow, parallel
+tools), all optional.
 
 ## v0.6 — scale-out (optional)
 
