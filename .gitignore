@@ -16,3 +16,5 @@ build/
 
 # regenerable: uv run python examples/b2b-support/seed.py
 examples/b2b-support/demo.db
+
+TODO.md
