@@ -4,12 +4,11 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.4.0 shipped; v0.4.1 adds local decision-model support.** The harness
+**Status: v0.5 in progress.** The harness
 includes a registry-driven agent loop, event log, MCP tools, OTel/Langfuse
-evaluation, and three pluggable decision-model adapters. The local Ollama
-`d1-omni` adapter is exercised against a live server; see the decision-model
-quickstart below. See [`docs/milestones.md`](docs/milestones.md) for milestone
-evidence and remaining work.
+evaluation, three pluggable decision-model adapters, and automatic entry-points
+discovery for third-party capabilities. See [`docs/milestones.md`](docs/milestones.md) for
+milestone evidence and remaining work.
 
 ---
 
@@ -31,7 +30,7 @@ a YAML file. Swapping Qdrant for anything else is one class.
 |---|---|:-:|:-:|:-:|:-:|:-:|:-:|
 | Agent loop + streaming | core | ● | | | | | |
 | Tools (JSON-schema function calling) | decorator | ● | | | | | |
-| Registry + entry-point discovery | core | ● | | | | | |
+| Registry + entry-point discovery (on by default) | core | ● | | | ● | ● | |
 | Skills (progressive disclosure) | filesystem | | ● | | | | |
 | SQLite event log + sessions | core | | ● | | | | |
 | `harness chat` REPL | core | | ● | | | | |
@@ -128,6 +127,27 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
 - [`docs/adr/`](docs/adr/) — 17 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
+
+## Manifest schema
+
+Every `agent.yaml` manifest is validated against the JSON Schema at
+`rigging/schema/agent.schema.json`. Print it with:
+
+```bash
+uv run harness schema
+```
+
+The schema ensures manifests have valid structure and documents all
+configurable options. Use it with editor tooling for autocomplete and
+validation.
+
+## Third-party capabilities
+
+Third-party packages can register tools, guardrails, retrievers, and decision
+models via Python entry points. See
+[`examples/third-party-tools/README.md`](examples/third-party-tools/README.md)
+for the registration pattern. Entry-points are discovered automatically when
+`assemble()` is called without an explicit `Registry`.
 
 ## Non-goals
 

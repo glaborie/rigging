@@ -100,13 +100,19 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
              prices: PriceTable | None = None) -> Assembled:
     if registry is None:
         # The default registry is populated by the built-in capability packs at
-        # import; third-party entry points are discovered separately (ADR-0003).
+        # import; third-party entry points are discovered (ADR-0003).
         import rigging.guardrails
         import rigging.retriever
         import rigging.tools.core
         if any(n in ("lookup_order", "check_pricing", "refund_order") for n in spec.tools):
             import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY
+        # Entry-points are discovered on by default; this is logged by the runner
+        # for visibility. Silence via registry=Registry() to opt out.
+        discovered = registry.discover_entry_points()
+        if discovered:
+            import sys as _sys
+            print(f"  discovered: {', '.join(discovered)}", file=_sys.stderr)
 
     if client is None:
         from rigging.client.openai_compat import OpenAICompatClient

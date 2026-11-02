@@ -1,7 +1,7 @@
 # Architecture
 
-> Status: v0.0 scaffold. The interfaces below exist in code; implementations are
-> stubs until their milestone.
+> Status: v0.4 complete. The interfaces below exist in code; implementations are
+> built and tested.
 
 ## 1. The claim
 
@@ -18,7 +18,7 @@ that claim seriously: the loop knows about protocols, never about vendors.
                     ┌───────────────────────────────▼──────────────────────────────────┐
                     │                            Registry                              │
                     │  tools · skills · guardrails · retrievers · decision models      │
-                    │  source 1: decorators in-process    source 2: entry points        │
+                    │  source 1: decorators in-process    source 2: entry points       │
                     └───────────────────────────────┬──────────────────────────────────┘
                                                     │
    ┌──────────────────────┐   ┌─────────────────────▼──────────────────────┐   ┌────────────────────┐
@@ -89,6 +89,9 @@ Three invariants fall out of this and are enforced by tests:
    by the loop, not by the tool's good behaviour.
 3. **Every step is an event.** If it is not in `run_events`, it did not happen.
 
+Entry-points are discovered automatically during assembly; the list is logged to
+stderr for visibility. To suppress, provide an explicit `Registry`.
+
 ## 4. Event log
 
 Append-only. The event log is the source of truth; every other view is a query.
@@ -148,3 +151,39 @@ implementations; neither is imported by the loop.
 | approval deny | tool message `denied by policy`; the model is told, the user is shown |
 | limits reached | one final call with tools disabled; then `BudgetExhausted` with partial transcript |
 | Ctrl-C | `CancelledError` propagates; partial transcript is already durable |
+
+## 7. Entry-points for third-party capabilities
+
+Third-party packages can register capabilities via Python entry points. The supported
+groups are:
+
+- `rigging.tools` → registers a tool (decorate a callable with `@tool()`)
+- `rigging.guardrails` → registers a guardrail (decorate a class with `@guardrail()`)
+- `rigging.retrievers` → registers a retriever (decorate a class with `@retriever()`)
+- `rigging.decision_models` → registers a decision model (decorate a class with `@decision_model()`)
+
+A minimal `pyproject.toml`:
+
+```toml
+[project.entry-points."rigging.tools"]
+my_tool = "my_package:register_tools"
+
+[project.entry-points."rigging.guardrails"]
+my_guard = "my_package:register_guardrails"
+```
+
+The registration function receives the `Registry` and can use its `add()` method:
+
+```python
+# my_package/__init__.py
+from rigging import tool, guardrail, Registry
+
+def register_tools(reg: Registry) -> None:
+    @tool("my_tool", side_effecting=True, registry=reg)
+    def my_tool(arg: str) -> str:
+        return f"processed: {arg}"
+```
+
+Entry-points are discovered automatically during `assemble()` and logged to stderr.
+To disable discovery, pass an explicit `Registry()` with `registry=registry` to
+`assemble()` or `run_agent()`.

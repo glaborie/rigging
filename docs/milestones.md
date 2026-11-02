@@ -87,9 +87,9 @@ Version bumped to 0.4.0.
 
 ## v0.5 — the professional finish
 
-- [ ] manifest JSON Schema published + `harness schema` documented
-- [ ] entry-points discovery on by default, with a documented third-party example
-- [ ] `docs/architecture.md` final, ADRs complete, writeup published
+- [x] manifest JSON Schema published + `harness schema` documented
+- [x] entry-points discovery on by default, with a documented third-party example
+- [x] `docs/architecture.md` final, ADRs complete, writeup published
 - [ ] 60-second terminal recording in the README
 - [ ] stretch: FastAPI + SSE web widget reading the same SQLite sessions
 
