@@ -117,7 +117,8 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
     if client is None:
         from rigging.client.openai_compat import OpenAICompatClient
 
-        client = OpenAICompatClient(settings.base_url, settings.api_key, timeout=settings.request_timeout_s)
+        profile = settings.profile(spec.credential_profile)
+        client = OpenAICompatClient(profile.base_url, profile.api_key, timeout=settings.request_timeout_s)
 
     fabricated = {"escalate_to_human", "search_policies", "load_skill"}
     mcp_prefixes = tuple(f"{s.name}__" for s in spec.mcp_servers)

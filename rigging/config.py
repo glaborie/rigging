@@ -17,7 +17,11 @@ class Profile(BaseModel):
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="RIGGING_", env_file=".env", extra="ignore")
+    # extra="allow" is how credential profiles stay open-ended: any
+    # RIGGING_PROFILE_<NAME>_BASE_URL / _API_KEY in .env or the environment lands
+    # in model_extra as profile_<name>_base_url / _api_key, with env beating .env.
+    model_config = SettingsConfigDict(env_prefix="RIGGING_", env_file=".env",
+                                      extra="allow")
 
     # default gateway: OmniRoute locally, or Ollama's OpenAI-compatible surface
     base_url: str = "http://localhost:20128/v1"
@@ -48,13 +52,28 @@ class Settings(BaseSettings):
     otlp_headers: str = ""
 
     def profile(self, name: str = "default") -> Profile:
-        """Named profiles come from extra env: RIGGING_PROFILE_<NAME>_BASE_URL / _API_KEY."""
+        """Named profiles come from RIGGING_PROFILE_<NAME>_BASE_URL / _API_KEY.
+
+        They are read from `.env` too (see `extra="allow"` above), so a manifest
+        naming `credential_profile: ollama` works with no shell exports. Precedence
+        is pydantic-settings': real environment beats `.env`.
+        """
         import os
 
         upper = name.upper()
-        base = os.environ.get(f"RIGGING_PROFILE_{upper}_BASE_URL", self.base_url)
-        key = os.environ.get(f"RIGGING_PROFILE_{upper}_API_KEY", self.api_key)
-        return Profile(base_url=base, api_key=key, label=name)
+        extra = self.model_extra or {}
+        prefix = f"profile_{name.lower()}_"
+        base = (
+            os.environ.get(f"RIGGING_PROFILE_{upper}_BASE_URL")
+            or extra.get(f"{prefix}base_url")
+            or self.base_url
+        )
+        key = (
+            os.environ.get(f"RIGGING_PROFILE_{upper}_API_KEY")
+            or extra.get(f"{prefix}api_key")
+            or self.api_key
+        )
+        return Profile(base_url=str(base), api_key=str(key), label=name)
 
 
 settings = Settings()
