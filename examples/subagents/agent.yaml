@@ -1,0 +1,22 @@
+# Subagent demo (ADR-0019): the parent delegates, the child is a real run.
+#
+#   uv run harness run examples/subagents/agent.yaml \
+#     "Use the researcher to explain what a vector database is, then summarise it in one sentence." --yes
+#   uv run harness runs            # the child is indented under the parent
+#
+# `--yes` approves the spawn tool: dispatching a subagent spends tokens and time,
+# so it goes through the same ApprovalPolicy as a refund.
+name: subagent-demo
+description: Delegates a research question to a child agent, then answers from its reply.
+model: qwen3:8b
+credential_profile: ollama
+system_prompt: |
+  You are a terse technical assistant. You cannot look things up yourself.
+  When a question needs research, call spawn_researcher with a self-contained
+  task, then answer the user in one sentence using what it returns.
+limits:
+  max_steps: 6
+subagents:
+  - name: researcher
+    manifest: researcher.yaml
+    description: Researches one self-contained question and answers in three sentences.

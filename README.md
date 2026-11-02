@@ -51,7 +51,7 @@ a YAML file. Swapping Qdrant for anything else is one class.
 | MCP servers as a tool source | entry point | | | | ● | | |
 | Manifest JSON Schema + docs | -- | | | | | ● | |
 | Web widget (read-only, SSE) | extra | | | | | ● | |
-| Subagents (`SubagentRunner`) | protocol slot | | | | | | ● |
+| Subagents (`SubagentRunner`) | manifest + protocol | | | | | | ● |
 | FastAPI service + auth | extra | | | | | | ● |
 
 `●` shipped · `◐` stretch goal
@@ -134,6 +134,7 @@ rigging/            the package (protocols, registry, loop, client, CLI)
   retriever/        Qdrant + FTS5 implementations of Retriever
   decide/           Laya decision model adapter
   service/          read-only FastAPI + SSE view of the event log (ADR-0018)
+  subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
 docs/
   architecture.md   how the layers fit and why
   milestones.md     v0.1 → v0.6 with the go-public gate
@@ -141,6 +142,7 @@ docs/
 rigging/schema/
   agent.schema.json machine-checkable manifest contract
 examples/b2b-support/   the canonical demo agent
+examples/subagents/     parent + child manifests (v0.6 delegation)
 scripts/          demo recording, Langfuse tail, gateway password reset
 tests/            unit + SSE wire fixtures + replay integration
 ```
@@ -150,7 +152,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
 
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
-- [`docs/adr/`](docs/adr/) — 18 decisions with the alternatives that were rejected
+- [`docs/adr/`](docs/adr/) — 19 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 
 ## Manifest schema

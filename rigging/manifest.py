@@ -58,6 +58,14 @@ class ObservabilityCfg(BaseModel):
     capture_content: bool = True
 
 
+class SubagentCfg(BaseModel):
+    """A child run this agent may dispatch (ADR-0019)."""
+
+    name: str
+    manifest: str
+    description: str = ""
+
+
 class McpServerCfg(BaseModel):
     name: str
     command: str | None = None
@@ -84,6 +92,7 @@ class AgentSpec(BaseModel):
     limits: Limits = Field(default_factory=Limits)
     observability: ObservabilityCfg = Field(default_factory=ObservabilityCfg)
     mcp_servers: list[McpServerCfg] = Field(default_factory=list)
+    subagents: list[SubagentCfg] = Field(default_factory=list)
 
     # provenance, not authorable
     source_path: str = ""

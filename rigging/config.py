@@ -53,6 +53,10 @@ class Settings(BaseSettings):
     request_timeout_s: float = 120.0
     max_retries: int = 3
 
+    # subagents (ADR-0019): how deep spawn_* tools may nest. Enforced at runtime,
+    # not per manifest, so a manifest cannot promote itself.
+    subagent_max_depth: int = 1
+
     # observability
     otlp_endpoint: str = ""
     otlp_headers: str = ""

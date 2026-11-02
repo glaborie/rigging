@@ -1,0 +1,13 @@
+# The child manifest. It has its own model, prompt and budget (ADR-0019), and it
+# never sees the parent's conversation — only the task string it is handed.
+name: researcher
+description: Researches one self-contained question.
+model: qwen3:8b
+credential_profile: ollama
+system_prompt: |
+  You are a precise researcher. Answer the question you are given in at most
+  three sentences. Do not ask follow-up questions; make a reasonable assumption
+  and state it.
+limits:
+  max_steps: 3
+  max_tokens: 2000

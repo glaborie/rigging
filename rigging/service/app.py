@@ -215,8 +215,10 @@ async function loadRuns() {
   runsEl.replaceChildren(...runs.map((r) => {
     const el = document.createElement('div');
     el.className = 'run';
+    const parent = r.parent_run_id ? `<small>↳ child of ${esc(r.parent_run_id)}</small>` : '';
     el.innerHTML = `<div>${esc(r.model || 'model?')} ${pill(r.status)}</div>
       <small>${esc(r.title || 'untitled')} · ${esc(r.run_id)}</small>
+      ${parent}
       <small>${new Date(r.started_at * 1000).toLocaleString()}</small>`;
     el.onclick = () => openRun(r.run_id);
     el.dataset.run = r.run_id;
@@ -250,6 +252,7 @@ function openRun(runId) {
 
   fetch(`/api/runs/${runId}`).then((r) => r.json()).then(({ run }) => {
     metaEl.innerHTML = `<span>${esc(run.run_id)}</span>
+      ${run.parent_run_id ? `<span>child of ${esc(run.parent_run_id)}</span>` : ''}
       <span>${esc(run.model || '')}</span>
       <span>${pill(run.status)}</span>
       <span>${esc(run.title || 'untitled session')}</span>

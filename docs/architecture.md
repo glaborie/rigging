@@ -213,3 +213,30 @@ Three properties are deliberate:
 
 The cost is stated in the ADR: read-only means no interactivity, and loopback
 with no auth means it is a development window, not a deployment.
+
+## 9. Subagents (v0.6, ADR-0019)
+
+A subagent is a child **run**, not a subprocess: same event log, same session,
+`runs.parent_run_id` set, its own manifest (model, prompt, guardrails, budget).
+
+| Piece | Where |
+|---|---|
+| declaration | `subagents: [{name, manifest, description}]` in the parent manifest |
+| tool | `spawn_<name>(task)`, `side_effecting=True` |
+| child run | `run_agent(child_spec, task, parent_run_id=…, depth=…, approval=parent.approval)` |
+| cap | `RIGGING_SUBAGENT_MAX_DEPTH` (default 1), enforced at call time as an `is_error` result |
+
+Four rules make the tree debuggable rather than magical:
+
+- **The log is shared.** The child's events are in the same database, so
+  `harness runs` and the web view show both, indented by `parent_run_id`.
+- **History is not inherited.** The child receives the task string and its own
+  system prompt; the parent's messages never cross the boundary.
+- **Approvals are inherited, policies are not.** The child uses the parent's
+  approval *object*, so a manifest cannot promote itself to `scripted`.
+- **Usage is per run.** The child's tokens appear in its own run row and in the
+  tool result; they are not repriced at the parent's model and not charged to the
+  parent's token budget. The parent's step budget bounds how often it can spawn.
+
+A child that ends `denied`, `budget_exhausted` or `error` still returns a JSON
+summary — with `is_error` set, so the parent model sees the failure and can react.

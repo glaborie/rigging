@@ -209,10 +209,12 @@ def cmd_runs(args: argparse.Namespace) -> int:
     if not rows:
         print("no runs yet", file=sys.stderr)
         return 1
-    print(f"{'run_id':<16} {'status':<12} {'model':<22} started")
+    print(f"{'run_id':<18} {'status':<12} {'model':<22} started")
     for r in rows:
         started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(r["started_at"]))
-        print(f"{r['run_id']:<16} {r['status']:<12} {r['model'] or '-':<22} {started}")
+        # A child run (ADR-0019) is indented under the run that spawned it.
+        prefix = "  └ " if r.get("parent_run_id") else ""
+        print(f"{prefix}{r['run_id']:<16} {r['status']:<12} {r['model'] or '-':<22} {started}")
     print("\ndrill in with: harness runs --run <run_id>")
     return 0
 

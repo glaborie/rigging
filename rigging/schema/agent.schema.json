@@ -212,6 +212,31 @@
           }
         ]
       }
+    },
+    "subagents": {
+      "type": "array",
+      "description": "Child runs this agent may dispatch as spawn_<name> tools (ADR-0019).",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "manifest"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z0-9_]+$"
+          },
+          "manifest": {
+            "type": "string",
+            "description": "Path to the child manifest, relative to this one."
+          },
+          "description": {
+            "type": "string"
+          }
+        }
+      }
     }
   },
   "$defs": {

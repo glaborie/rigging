@@ -73,6 +73,18 @@ def test_stream_stops_on_an_idle_running_run(tmp_path):
     assert '"reason": "idle"' in response.text
 
 
+def test_child_runs_are_visible_with_their_parent(tmp_path):
+    log, parent = _finished_run(tmp_path)
+    session_id = log.runs()[0]["session_id"]
+    child = log.start_run(session_id=session_id, model="fake", parent_run_id=parent)
+    log.append(child, "run_finished", {"status": "ok"})
+    log.finish_run(child, "ok")
+
+    payload = _client(tmp_path, log).get("/api/runs").json()
+    by_id = {r["run_id"]: r for r in payload["runs"]}
+    assert by_id[child]["parent_run_id"] == parent
+
+
 def test_unknown_run_is_a_404(tmp_path):
     log, _ = _finished_run(tmp_path)
     client = _client(tmp_path, log)

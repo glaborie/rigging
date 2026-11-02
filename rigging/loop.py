@@ -228,7 +228,8 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
               log: EventLog | None = None, session_id: str | None = None,
               stream: Callable[[ModelDelta], None] | None = None,
               approval: Any = None, prices: PriceTable | None = None,
-              history: list[Message] | None = None) -> RunResult:
+              history: list[Message] | None = None,
+              parent_run_id: str | None = None, depth: int = 0) -> RunResult:
     agent = assemble(spec, registry=registry, client=client, prices=prices)
     if approval is not None:
         agent.approval = approval
@@ -247,7 +248,8 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     log = log or EventLog(settings.db_path)
     owns_log = log is None
     session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
-    run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model)
+    run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
+                           parent_run_id=parent_run_id)
 
     system = spec.prompt().strip()
     if agent.skills is not None:
@@ -267,6 +269,25 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     messages.append(Message(role="user", content=user_content))
     log.append(run_id, "input_received", {"content": user_content})
 
+    if spec.subagents:
+        from rigging.errors import ManifestError
+        from rigging.subagents import make_spawn_tool, resolve_child
+
+        declared = {t.name for t in agent.tools}
+        for ref in spec.subagents:
+            tool = make_spawn_tool(
+                ref=ref, child=resolve_child(spec, ref),
+                log=log, session_id=session_id, run_id=run_id, depth=depth,
+                registry=registry, client=client,
+                approval=agent.approval, prices=agent.prices,
+            )
+            if tool.name in declared:
+                raise ManifestError(
+                    f"subagent {ref.name!r} collides with an existing tool {tool.name!r}"
+                )
+            declared.add(tool.name)
+            agent.tools.append(tool)
+
     tools = agent.tool_map()
     wire = [t.json_schema for t in agent.tools]
     usage = Usage()
@@ -279,6 +300,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "session.id": session_id,
         "rigging.run_id": run_id,
         "rigging.spec_hash": spec.spec_hash,
+        **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
     })
     last: ModelResponse | None = None
     exhausted: str | None = None
