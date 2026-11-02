@@ -24,7 +24,7 @@ APPROVE  ?= 0
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean trace record
+        retrieval hello demo run chat index eval up down logs clean trace serve record
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -33,7 +33,7 @@ help: ## show this help
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) \
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@printf '\nSetup:\n'
-	@printf '  uv sync --extra dev      core + test/lint tooling\n'
+	@printf '  uv sync --extra dev      core + test/lint tooling (make install adds service, mcp)\n'
 	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service]\n'
 	@printf '\nModel access (one is enough):\n'
 	@printf '  ollama signin            beam:cloud, free at time of writing, no API key\n'
@@ -47,8 +47,8 @@ help: ## show this help
 	@printf '  make trace               run the example, then print the spans it produced\n'
 	@printf '\nFirst run: make install && make gateway && make hello\n\n'
 
-install: ## create the venv with dev extras
-	uv sync --extra dev
+install: ## venv with dev + the extras the test suite exercises (service, mcp)
+	uv sync --extra dev --extra service --extra mcp
 
 check: ## what CI runs: lint + typecheck + tests (no network)
 	$(MAKE) --no-print-directory lint typecheck test
@@ -106,6 +106,9 @@ record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
 	uv run python scripts/record_demo.py
 	uv run python scripts/cast_to_gif.py
 
+serve: ## read-only web view of the event log: http://127.0.0.1:8000
+	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),)
+
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),)
 
@@ -115,8 +118,12 @@ seed: ## build the demo fixture DB: products, orders, policy chunks (determinist
 index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds for qdrant
 	uv run harness index $(MANIFEST)
 
-eval: ## run an eval suite over the event log (v0.4)
-	uv run harness eval
+demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make seed)
+	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
+	  $(if $(MODEL),--model $(MODEL),) $(if $(filter 1,$(APPROVE)),--yes,)
+
+eval: ## run the b2b-support eval suite over the event log: make eval SUITE=...
+	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),)
 
 up: gateway ## alias for `make gateway`
 

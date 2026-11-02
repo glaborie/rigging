@@ -187,3 +187,29 @@ def register_tools(reg: Registry) -> None:
 Entry-points are discovered automatically during `assemble()` and logged to stderr.
 To disable discovery, pass an explicit `Registry()` with `registry=registry` to
 `assemble()` or `run_agent()`.
+## 8. The web view (v0.5, ADR-0018)
+
+`rigging/service/` is a projection, not a layer: it reads `sessions`, `runs` and
+`run_events` and nothing else.
+
+| Route | Shape |
+|---|---|
+| `GET /` | one HTML page, vanilla JS, no build step |
+| `GET /api/runs?limit=` | recent runs joined to their session title |
+| `GET /api/runs/{id}` | the run plus its events, in `seq` order |
+| `GET /api/runs/{id}/stream` | SSE: replay, then tail by `seq` until the run ends, goes idle, or hits `timeout` |
+
+Three properties are deliberate:
+
+- **No writes.** The log is opened with SQLite `mode=ro`, so the read-only claim
+  is enforced by the driver, not by discipline. There is no launch or approve
+  endpoint: approvals stay in the loop where `ApprovalPolicy` lives.
+- **No second store.** The page renders whatever is in the log, so it cannot
+  drift from `harness runs` or the eval CLI.
+- **No push infrastructure.** The SSE generator polls `run_events` every 300 ms
+  by `seq`. A run that outlives `idle_seconds` closes the connection and the
+  browser's `EventSource` reconnects, which keeps a long agent run from pinning
+  a worker forever.
+
+The cost is stated in the ADR: read-only means no interactivity, and loopback
+with no auth means it is a development window, not a deployment.

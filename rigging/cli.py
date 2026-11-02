@@ -73,6 +73,11 @@ def _parser() -> argparse.ArgumentParser:
     chat.add_argument("--session", default=None, help="resume a session id")
     chat.add_argument("--show-reasoning", action="store_true")
 
+    serve = sub.add_parser("serve", help="read-only web view of the event log (v0.5)")
+    serve.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
+    serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
+    serve.add_argument("--port", type=int, default=8000)
+
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
     tools.add_argument("--kind", default=None, help="tool | guardrail | retriever | decision_model")
@@ -252,6 +257,24 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_serve(args: argparse.Namespace) -> int:
+    try:
+        from rigging.service import create_app
+    except ModuleNotFoundError:
+        print("`harness serve` needs the [service] extra: uv sync --extra service",
+              file=sys.stderr)
+        return 2
+    import uvicorn
+
+    db = args.db or settings.db_path
+    if not pathlib.Path(db).exists():
+        print(f"no event log at {db} — run an agent first", file=sys.stderr)
+        return 2
+    print(f"rigging runs: http://{args.host}:{args.port}  (read-only, db={db})")
+    uvicorn.run(create_app(db), host=args.host, port=args.port, log_level="warning")
+    return 0
+
+
 def cmd_tools(args: argparse.Namespace) -> int:
     import rigging.decide
     import rigging.guardrails
@@ -271,7 +294,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate, "serve": cmd_serve}[args.command]
     return handler(args)
 
 

@@ -4,11 +4,11 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.5 in progress.** The harness
-includes a registry-driven agent loop, event log, MCP tools, OTel/Langfuse
-evaluation, three pluggable decision-model adapters, and automatic entry-points
-discovery for third-party capabilities. See [`docs/milestones.md`](docs/milestones.md) for
-milestone evidence and remaining work.
+**Status: v0.5 shipped (2026-11-02).** The harness includes a registry-driven
+agent loop, event log, MCP tools, OTel/Langfuse tracing, an eval CLI, three
+pluggable decision-model adapters, automatic entry-points discovery, and a
+read-only web view over the same event log. See
+[`docs/milestones.md`](docs/milestones.md) for milestone evidence.
 
 ![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
 
@@ -50,7 +50,7 @@ a YAML file. Swapping Qdrant for anything else is one class.
 | `harness eval` | core | | | | ● | | |
 | MCP servers as a tool source | entry point | | | | ● | | |
 | Manifest JSON Schema + docs | -- | | | | | ● | |
-| Web widget (stretch) | extra | | | | | ◐ | |
+| Web widget (read-only, SSE) | extra | | | | | ● | |
 | Subagents (`SubagentRunner`) | protocol slot | | | | | | ● |
 | FastAPI service + auth | extra | | | | | | ● |
 
@@ -64,11 +64,11 @@ ollama signin                              # beam:cloud, free at time of writing
 # or the fully local path:
 ollama pull qwen3:8b
 
-# 2. Install
-uv sync
+# 2. Install (dev + service extras)
+make install
 
-# 3. Run an agent (v0.1: the no-tools smoke agent)
-uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --model freellm/codestral
+# 3. Run an agent (the no-tools smoke agent)
+uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --model qwen3:8b
 
 # Interactive chat: one session, many runs, continuous memory
 uv run harness chat examples/hello/agent.yaml
@@ -76,14 +76,30 @@ uv run harness chat examples/hello/agent.yaml
 # Offline: replay a recorded transcript instead of calling the API
 uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
 
-# The b2b-support agent (5 tools, skills, retrieval, guardrails) lands in v0.3 —
-# its manifest is final but its tools are not implemented yet, so assembly
-# correctly fails fast. See docs/milestones.md.
+# The canonical demo: 5 tools, 2 skills, FTS5 retrieval, 3 guardrails, approval
+make seed                                        # deterministic demo.db (seed=7)
+make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
+make eval MODEL=qwen3:8b                          # event-log predicates, per-case table
 ```
 
 No API key is required for either path. The gateway is OpenAI-compatible HTTP,
 so pointing `RIGGING_BASE_URL` at OmniRoute, vLLM, LM Studio or Ollama's own
 `/v1` is all it takes to switch providers.
+
+## Web view
+
+A read-only page over the same SQLite event log — no second store, no write
+endpoint, no build step ([ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)).
+
+```bash
+make hello                      # or make demo — anything that writes rigging.db
+make serve                      # http://127.0.0.1:8000
+```
+
+The left column lists runs; picking one replays its events and then follows it
+live over SSE (`/api/runs/{id}/stream`). Approvals stay in the loop: the page
+cannot launch a run or answer a guardrail, by design. It binds loopback only and
+has no auth, so exposing it is a deployment decision that belongs to v0.6.
 
 ## Decision models: cloud or local
 
@@ -117,6 +133,7 @@ rigging/            the package (protocols, registry, loop, client, CLI)
   guardrails/       four deterministic built-ins
   retriever/        Qdrant + FTS5 implementations of Retriever
   decide/           Laya decision model adapter
+  service/          read-only FastAPI + SSE view of the event log (ADR-0018)
 docs/
   architecture.md   how the layers fit and why
   milestones.md     v0.1 → v0.6 with the go-public gate
@@ -124,6 +141,7 @@ docs/
 rigging/schema/
   agent.schema.json machine-checkable manifest contract
 examples/b2b-support/   the canonical demo agent
+scripts/          demo recording, Langfuse tail, gateway password reset
 tests/            unit + SSE wire fixtures + replay integration
 ```
 
@@ -132,7 +150,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
 
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
-- [`docs/adr/`](docs/adr/) — 17 decisions with the alternatives that were rejected
+- [`docs/adr/`](docs/adr/) — 18 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 
 ## Manifest schema
@@ -160,8 +178,9 @@ for the registration pattern. Entry-points are discovered automatically when
 
 Deliberately not built (see [ADR-0017](docs/adr/0017-deliberate-non-goals.md)):
 agent long-term memory, multi-agent orchestration in v1, serving MCP, LLM-as-judge
-guardrails or evals, user auth before the service milestone, a web UI before v0.5,
-model fine-tuning, parallel tool execution, Windows-native support, a plugin
+guardrails or evals, user auth before the service milestone, a *write-capable* web
+UI (v0.5 ships a read-only view, ADR-0018), model fine-tuning, parallel tool
+execution, Windows-native support, a plugin
 
 
 ## Development TODO
