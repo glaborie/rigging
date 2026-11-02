@@ -24,7 +24,7 @@ APPROVE  ?= 0
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean trace
+        retrieval hello demo run chat index eval up down logs clean trace record
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -101,6 +101,10 @@ hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
+
+record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
+	uv run python scripts/record_demo.py
+	uv run python scripts/cast_to_gif.py
 
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),)

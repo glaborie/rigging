@@ -10,6 +10,13 @@ evaluation, three pluggable decision-model adapters, and automatic entry-points
 discovery for third-party capabilities. See [`docs/milestones.md`](docs/milestones.md) for
 milestone evidence and remaining work.
 
+![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
+
+Recorded from [`scripts/demo.sh`](scripts/demo.sh) by `make record` — the GIF is
+rendered from [`docs/demo.cast`](docs/demo.cast), which replays with
+`asciinema play docs/demo.cast`. The run is real: host Ollama, the seeded demo
+database, and a scratch event log.
+
 ---
 
 ## Why
