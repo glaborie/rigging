@@ -6,7 +6,7 @@ the first point at which a stranger can run it and understand it.
 **Current state (2026-11-02):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
 Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
 is complete; a live Clef-Flash classification run is the only pending evidence and
-waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5):
+waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5); v0.6 in progress (subagents done).
 schema, entry-points, the architecture/ADR pass, the README recording and the
 read-only web widget. 108 tests, ruff + `mypy --strict` clean.
 
@@ -131,7 +131,15 @@ tools), all optional.
 
 ## v0.6 — scale-out (optional)
 
-- [ ] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
+- [x] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
+      ADR-0019. `subagents:` in the manifest becomes `spawn_<name>(task)`,
+      side-effecting so the approval gate applies; the child is a run in the same
+      log and session, with its own model, prompt and limits, isolated history,
+      and `runs.parent_run_id` set. Depth capped by
+      `RIGGING_SUBAGENT_MAX_DEPTH` (default 1) as a structured `is_error` result.
+      `examples/subagents/` runs live on `qwen3:8b`; 8 tests in
+      `tests/test_subagents.py` (child in the same log, failed child, auto-deny,
+      depth cap, usage accounting, missing manifest, name collision, redaction).
 - [ ] FastAPI service + auth (bearer keys or OIDC) designed as its own ADR
 - [ ] MLflow exporter as the second `Exporter`
 - [ ] parallel tool execution behind an opt-in flag

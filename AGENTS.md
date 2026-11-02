@@ -14,8 +14,9 @@ deliverable, and a reviewer's first five minutes matter as much as the tests.**
 Current state: v0.5 shipped (2026-11-02). The loop, client, registry, event log,
 manifest, guardrails, retriever, Laya decision model, MCP tools, OTel/Langfuse
 exporters, eval CLI and the read-only web view are implemented and tested
-(108 tests, ruff + `mypy --strict` clean). All four exit-criteria demos verified
-live. v0.6 is optional: subagents, service auth, MLflow, parallel tools.
+(117 tests, ruff + `mypy --strict` clean). All four exit-criteria demos verified
+live. v0.6 is optional and in progress: subagents shipped; service auth, an
+MLflow exporter and parallel tool execution are open.
 
 ## Hard rules (violating these fails review)
 
@@ -43,9 +44,9 @@ live. v0.6 is optional: subagents, service auth, MLflow, parallel tools.
 8. **No LLM-as-judge** in guardrails or evals (ADR-0009, ADR-0017).
 9. **No silent feature: the CLI says what is not built.** Unimplemented commands
    print the milestone and exit 2.
-10. **Non-goals stay non-goals** (ADR-0017). If a task seems to need agent
-    memory, subagents, a web UI, parallel tool execution or MCP serving, stop and
-    ask — the answer is probably "later milestone".
+10. **Non-goals stay non-goals** (ADR-0017). Agent memory, MCP serving and
+    write-capable UIs are still out. Subagents (v0.6, ADR-0019) and a read-only
+    web view (v0.5, ADR-0018) are in: extend those, do not reinvent them.
 
 ## Layout
 
@@ -64,6 +65,7 @@ rigging/
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations
   service/          read-only FastAPI + SSE view of the event log (ADR-0018)
+  subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   cli.py            harness run|schema|tools|chat|index|eval|calibrate|serve
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
