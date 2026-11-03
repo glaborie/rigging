@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+# Check the OmniRoute dashboard login the way the browser does: POST the password
+# to /api/auth/login. HTTP 200 means the gateway accepts it. Set the password with
+# `make gateway-password PW=...` (scripts/omniroute-reset-password.sh) if it 401s.
+#
+#   scripts/login.sh [password]
+set -euo pipefail
+
+PW="${1:-donotchangeme}"
+
 curl --url 'http://localhost:20128/api/auth/login' \
   -H 'Accept: */*' \
   -H 'Accept-Language: en,fr;q=0.9,de-DE;q=0.8,de;q=0.7' \
@@ -14,4 +24,4 @@ curl --url 'http://localhost:20128/api/auth/login' \
   -H 'sec-ch-ua-mobile: ?0' \
   -H 'sec-ch-ua-platform: "Windows"' \
   -H 'sec-gpc: 1' \
-  --data-raw '{"password":"donotchangeme"}'
+  --data-raw "{\"password\":\"$PW\"}"
