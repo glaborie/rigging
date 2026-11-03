@@ -13,6 +13,7 @@ Three invariants, each covered by a test:
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Callable, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -75,6 +76,32 @@ def _end_span(agent: Assembled, spans: Any, attributes: dict[str, Any]) -> None:
             exporter.end_span(span, attributes)
         except Exception:
             continue
+
+
+def _content(spec: AgentSpec, *, input_value: Any = None,
+             output_value: Any = None, trace: bool = False) -> dict[str, Any]:
+    """Langfuse reads observation content from these JSON-string attributes.
+
+    `langfuse.observation.input` / `.output` are what fill the trace and
+    generation columns in the UI; the `gen_ai.*` attributes only carry model and
+    usage metadata. `trace=True` (root span only) also sets the legacy
+    `langfuse.trace.*` fields, which v3 reads and v4 keeps for evaluators.
+    Gated by the manifest's `capture_content`.
+    """
+    if not spec.observability.capture_content:
+        return {}
+    attrs: dict[str, Any] = {}
+    if input_value is not None:
+        value = json.dumps(input_value, default=str)
+        attrs["langfuse.observation.input"] = value
+        if trace:
+            attrs["langfuse.trace.input"] = value
+    if output_value is not None:
+        value = json.dumps(output_value, default=str)
+        attrs["langfuse.observation.output"] = value
+        if trace:
+            attrs["langfuse.trace.output"] = value
+    return attrs
 
 
 def _sub_env(value: Any) -> Any:
@@ -253,6 +280,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                 "gen_ai.usage.input_tokens": result.usage.input_tokens,
                 "gen_ai.usage.output_tokens": result.usage.output_tokens,
                 "rigging.cost_usd": result.cost_usd,
+                **_content(agent.spec, output_value=result.output, trace=True),
             })
             root["ended"] = True
         for exporter in agent.exporters:
@@ -318,6 +346,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.run_id": run_id,
         "rigging.spec_hash": spec.spec_hash,
         **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
+        **_content(spec, input_value=user_content, trace=True),
     })
     last: ModelResponse | None = None
     exhausted: str | None = None
@@ -334,6 +363,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             "gen_ai.request.model": spec.model,
             "gen_ai.request.max_tokens": spec.limits.max_tokens,
             "rigging.step": step,
+            **_content(spec, input_value=[
+                {"role": m.role, "content": m.content} for m in messages
+            ]),
         })
         request = ModelRequest(model=spec.model, messages=messages, tools=wire)
         log.append(run_id, "model_request", {"model": spec.model, "messages": len(messages), "tools": list(tools)})
@@ -347,6 +379,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             "gen_ai.usage.output_tokens": response.usage.output_tokens,
             "gen_ai.response.finish_reason": response.finish_reason,
             "rigging.tool_calls": len(response.tool_calls),
+            **_content(spec, output_value=response.message.content or [
+                {"name": c.name, "arguments": c.arguments} for c in response.tool_calls
+            ] or None),
         })
         log.append(run_id, "model_response", {
             "content": response.message.content,
@@ -406,6 +441,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.steps": step,
         "rigging.handoff": bool(agent.handoff),
         "rigging.cost_usd": agent.prices.cost(spec.model, usage),
+        **_content(spec, output_value=output, trace=True),
     })
     root["ended"] = True
     log.append(run_id, "run_finished", {"status": "ok", "content_chars": len(output)})
@@ -481,6 +517,7 @@ def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
         "gen_ai.operation.name": "execute_tool",
         "gen_ai.tool.name": call.name,
         "rigging.tool.side_effecting": bool(getattr(tools.get(call.name), "side_effecting", False)),
+        **_content(agent.spec, input_value=call.arguments),
     })
     tool = tools.get(call.name)
     job = _CallJob(call=call, tool=tool, span=tool_span)
@@ -512,7 +549,8 @@ def _finish_call(job: _CallJob, result: ToolResult, agent: Assembled, log: Event
                  run_id: str) -> Message:
     """Everything that must stay on the main thread: spans, handoff, events, message."""
     _end_span(agent, job.span, {"rigging.tool.denied": result.denied,
-                                "rigging.tool.is_error": result.is_error})
+                                "rigging.tool.is_error": result.is_error,
+                                **_content(agent.spec, output_value=result.content)})
     if job.call.name == "escalate_to_human" and not result.is_error:
         _capture_handoff(agent, result.content, log, run_id)
 

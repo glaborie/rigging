@@ -68,6 +68,53 @@ def test_manifest_exporter_receives_run_model_and_tool_spans(tmp_path, monkeypat
     assert exporter.closed is True
 
 
+def test_spans_carry_the_prompt_and_answer(tmp_path, monkeypatch):
+    """The UI's input/output columns come from langfuse.observation.*, not gen_ai.*."""
+    import json
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hash it", log=EventLog(tmp_path / "c.db"),
+              client=FakeClient([{"role": "assistant", "content": "done"}]))
+
+    root = exporter.spans[0][1]
+    assert json.loads(root["langfuse.observation.input"]) == "hash it"
+    assert json.loads(root["langfuse.trace.input"]) == "hash it"
+    chat_input = json.loads(dict(exporter.spans)["chat"]["langfuse.observation.input"])
+    assert {"role": "user", "content": "hash it"} in chat_input
+
+    ended = dict(exporter.ended)
+    assert json.loads(ended["invoke_agent"]["langfuse.observation.output"]) == "done"
+    assert json.loads(ended["invoke_agent"]["langfuse.trace.output"]) == "done"
+    assert json.loads(ended["chat"]["langfuse.observation.output"]) == "done"
+
+
+def test_capture_content_false_keeps_content_out_of_spans(tmp_path, monkeypatch):
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, observability={"exporters": ["console"], "capture_content": False})
+
+    run_agent(spec, "secret", log=EventLog(tmp_path / "d.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    for _, attrs in exporter.spans + exporter.ended:
+        assert not any(k.startswith("langfuse.observation.") for k in attrs)
+
+
+def test_exporter_capture_content_false_drops_content(monkeypatch):
+    from rigging.observability import LangfuseExporter
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    exporter = LangfuseExporter(capture_content=False)
+    assert exporter._attributes({
+        "langfuse.observation.input": '"x"',
+        "gen_ai.request.model": "m",
+    }) == {"gen_ai.request.model": "m"}
+
+
 def test_no_spans_without_the_manifest_asking(tmp_path, monkeypatch):
     exporter = RecordingExporter()
     _patched_exporters(monkeypatch, exporter)

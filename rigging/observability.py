@@ -13,7 +13,9 @@ Langfuse specific gotchas, learned the hard way (they cost hours once):
   * auth is HTTP Basic with `public_key:secret_key`, base64-encoded;
   * send `x-langfuse-ingestion-version: 4` or traces land in the legacy pipeline;
   * a span's gen_ai.* attributes are what produce model/usage columns in the UI;
-    `session.id` on the root span is what groups multi-turn conversations.
+    `session.id` on the root span is what groups multi-turn conversations;
+  * input/output columns come from `langfuse.observation.input` / `.output`
+    (JSON strings), not from `gen_ai.*`; `capture_content: false` drops them.
 """
 
 from __future__ import annotations
@@ -100,15 +102,22 @@ class LangfuseExporter:
 
         tracer = self._tracer_obj()
         ctx = ot_trace.set_span_in_context(self._stack[-1]) if self._stack else None
-        span = tracer.start_span(name, context=ctx,
-                                 attributes={k: v for k, v in attributes.items() if v is not None})
+        span = tracer.start_span(name, context=ctx, attributes=self._attributes(attributes))
         self._stack.append(span)
         return span
 
+    def _attributes(self, attributes: dict[str, Any]) -> dict[str, Any]:
+        """Drop nulls, and content when this exporter is told not to capture it."""
+        kept = {k: v for k, v in attributes.items() if v is not None}
+        if self.capture_content:
+            return kept
+        return {k: v for k, v in kept.items()
+                if not k.startswith(("langfuse.observation.input",
+                                     "langfuse.observation.output"))}
+
     def end_span(self, span: Any, attributes: dict[str, Any] | None = None) -> None:
-        for key, value in (attributes or {}).items():
-            if value is not None:
-                span.set_attribute(key, value)
+        for key, value in self._attributes(attributes or {}).items():
+            span.set_attribute(key, value)
         span.end()
         if self._stack and self._stack[-1] is span:
             self._stack.pop()
