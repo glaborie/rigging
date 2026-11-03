@@ -59,6 +59,10 @@ def parse(stdout: str) -> list[dict]:
     ]
 
 
+def _txt(x) -> str:
+    return x.decode(errors="replace") if isinstance(x, bytes) else (x or "")
+
+
 def median(xs: list) -> float | None:
     xs = [x for x in xs if x is not None]
     return statistics.median(xs) if xs else None
@@ -75,6 +79,7 @@ def main() -> int:
     ap.add_argument("--repeats", type=int, default=5)
     ap.add_argument("--cmd", default=DEFAULT_CMD, help="template with {suite} and {model}")
     ap.add_argument("--safety-prefix", default="safety-")
+    ap.add_argument("--safety-cases", nargs="*", default=[], help="case names that are invariants")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out", default="results")
     a = ap.parse_args()
@@ -82,6 +87,7 @@ def main() -> int:
     out = Path(a.out)
     (out / "raw").mkdir(parents=True, exist_ok=True)
     summary: dict[str, dict] = {}
+    per_case: dict[str, dict[str, list[bool]]] = {}
 
     for model in a.models:
         trials: list[dict] = []
@@ -92,15 +98,18 @@ def main() -> int:
             t0 = time.monotonic()
             try:
                 p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout)
-                stdout, rc = p.stdout, p.returncode
+                stdout, stderr, rc = p.stdout, p.stderr, p.returncode
             except subprocess.TimeoutExpired as e:
-                stdout, rc = (e.stdout or b"").decode() if isinstance(e.stdout, bytes) else (e.stdout or ""), -1
+                stdout, stderr, rc = _txt(e.stdout), _txt(e.stderr) + "\n[timeout]", -1
             wall.append(time.monotonic() - t0)
             safe = re.sub(r"[^\w.\-]", "_", model)
-            (out / "raw" / f"{safe}-{rep}.txt").write_text(stdout)
+            (out / "raw" / f"{safe}-{rep}.txt").write_text(
+                stdout + (f"\n--- stderr ---\n{stderr}" if stderr else ""))
             rows = parse(stdout)
             if not rows:  # a run that produced no parsable cases is a crash, not a pass
                 crashes += 1
+                tail = [ln for ln in (stderr or stdout).strip().splitlines() if ln.strip()][-3:]
+                print("  no cases parsed; last output: " + " | ".join(tail), file=sys.stderr)
             trials.extend(rows)
             print(f"{model} rep {rep + 1}/{a.repeats}: {len(rows)} cases, rc={rc}", file=sys.stderr)
 
@@ -110,8 +119,14 @@ def main() -> int:
             return {"passed": k, "n": len(rows), "rate": k / len(rows) if rows else None,
                     "ci95": [lo, hi]}
 
-        safety = [r for r in trials if r["case"].startswith(a.safety_prefix)]
-        task = [r for r in trials if not r["case"].startswith(a.safety_prefix)]
+        def is_safety(c: str) -> bool:
+            return c.startswith(a.safety_prefix) or c in a.safety_cases
+
+        safety = [r for r in trials if is_safety(r["case"])]
+        task = [r for r in trials if not is_safety(r["case"])]
+        per_case[model] = {}
+        for r in trials:
+            per_case[model].setdefault(r["case"], []).append(r["passed"])
         flaky = sorted({
             c for c in {r["case"] for r in trials}
             if 0 < sum(r["passed"] for r in trials if r["case"] == c) < sum(r["case"] == c for r in trials)
@@ -141,6 +156,16 @@ def main() -> int:
             f"{fmt(s['latency_s_median'])} | {fmt(s['steps_median'], '.0f')} | "
             f"{fmt(s['cost_usd_median'], '.4f')} | {', '.join(s['flaky_cases']) or '-'} |"
         )
+    cases = sorted({c for m in per_case.values() for c in m})
+    lines += ["", "Per case (passes/repeats):", "",
+              "| Case | " + " | ".join(f"`{m}`" for m in per_case) + " |",
+              "|---|" + "---|" * len(per_case)]
+    for c in cases:
+        cells = []
+        for m in per_case:
+            r = per_case[m].get(c)
+            cells.append(f"{sum(r)}/{len(r)}" if r else "n/a")
+        lines.append(f"| {c}{' (invariant)' if is_safety(c) else ''} | " + " | ".join(cells) + " |")
     (out / "table.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
     return 0
