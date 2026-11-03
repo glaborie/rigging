@@ -2,8 +2,8 @@
 
 ## `b2b-support/` — the canonical demo agent
 
-Target state: v0.3. The manifest, prompt and both skills are final; the tools and
-the fixture database land with the v0.3 milestone (`seed.py` documents the shape).
+Target state: v0.3, shipped. The manifest, prompt, both skills, the tools and the
+seeded fixture database are final (`seed.py` documents the shape).
 
 It exercises every layer of the harness at once:
 
@@ -40,3 +40,35 @@ make serve                   # both runs, the child labelled "child of …"
 `--yes` is needed because `spawn_*` tools are side-effecting: delegation spends
 tokens, so it goes through the same approval gate as a refund. The child never
 sees the parent's conversation — only the task string.
+
+## `parallel/` — two tools in one response (v0.6)
+
+`parallel_tools: true` runs only `tool.run` for a single model response in a
+bounded pool; prepare (events, spans, guardrails, approval) and finish (events,
+messages) stay serial and in declared order (ADR-0022).
+
+```bash
+uv run harness run examples/parallel/agent.yaml \
+  "In one response, call current_time for Europe/Zurich and sha256_hex for the text 'rigging'."
+uv run harness runs --run <run_id> | grep tool_batch
+# tool_batch {"parallel": true, "calls": ["current_time", "sha256_hex"]}
+```
+
+Flip the flag to `false` and the same prompt records `{"parallel": false}`.
+
+## `mlflow/` — one run per run (v0.6)
+
+The same loop with the MLflow exporter instead of Langfuse. No SDK and no extra:
+the exporter speaks MLflow's `2.0` tracking REST API (ADR-0020).
+
+```bash
+uvx mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+uv run harness run examples/mlflow/agent.yaml "say hello in one sentence"
+```
+
+The MLflow run is `FINISHED` on `ok`, `FAILED` on a denied or exhausted run.
+
+## `observability/` — spans to Langfuse
+
+Same shape as `mlflow/`, with `exporters: [langfuse]` over OTLP. `make trace` is
+the one command that runs it and reads the spans back.

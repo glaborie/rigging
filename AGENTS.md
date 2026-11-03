@@ -15,7 +15,7 @@ Current state: v0.5 shipped (2026-11-02); v0.6 scale-out complete. The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (136 tests, ruff + `mypy --strict` clean). All four exit-criteria demos
+tested (139 tests, ruff + `mypy --strict` clean). All four exit-criteria demos
 verified live.
 
 ## Hard rules (violating these fails review)
@@ -72,6 +72,10 @@ docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered
 docs/milestones.md                 the task list; definitions of done
 examples/b2b-support/              the canonical demo (manifest + skills final)
+examples/subagents/                parent + child manifests (v0.6)
+examples/parallel/                 two tools in one response (v0.6)
+examples/mlflow/                   MLflow exporter smoke agent (v0.6)
+docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 tests/                             unit, SSE wire fixtures, loop invariants
 ```
 

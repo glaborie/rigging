@@ -1,0 +1,25 @@
+# v0.6 parallel tool execution (ADR-0022): one model response, two tools, one pool.
+#
+#   uv run harness run examples/parallel/agent.yaml \
+#     "In one response, call current_time for Europe/Zurich and sha256_hex for the text 'rigging'. Then report both."
+#   uv run harness runs                 # note the run id
+#   uv run harness runs --run <run_id>  # look for the tool_batch event
+#
+# The `tool_batch` event records {"parallel": true}. The two `tool_call` events
+# still appear in declared order, and so do the two `tool_result` events; only
+# `tool.run` ran concurrently. Flip `parallel_tools` to false and the same prompt
+# produces a `tool_batch {"parallel": false}` with no overlap.
+name: parallel-tools
+model: qwen3:8b
+credential_profile: ollama
+system_prompt: >
+  You are a precise assistant. When two tool calls do not depend on each other,
+  emit both in the same response instead of calling them one at a time. Report
+  the results plainly.
+tools:
+  - current_time
+  - sha256_hex
+parallel_tools: true
+limits:
+  max_steps: 4
+  max_tokens: 4000

@@ -1,0 +1,21 @@
+# v0.6 MLflow exporter (ADR-0020): one rigging run becomes one MLflow run.
+# No SDK and no extra to install — the exporter speaks the 2.0 tracking REST API.
+#
+#   uvx mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+#   uv run harness run examples/mlflow/agent.yaml "say hello in one sentence"
+#   curl -s 'http://localhost:5000/api/2.0/mlflow/runs/search' \
+#     -H 'content-type: application/json' \
+#     -d '{"experiment_ids":["0"],"max_results":5}' | python -m json.tool
+#
+# Point it elsewhere with MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_ID, or per run:
+#   exporters: ["mlflow:tracking_uri=http://host:5000,experiment_id=0"]
+name: mlflow-smoke
+model: qwen3:8b
+credential_profile: ollama
+system_prompt: You are a terse assistant. Answer in one sentence.
+observability:
+  exporters: [mlflow]
+  capture_content: true
+limits:
+  max_steps: 4
+  max_tokens: 4000

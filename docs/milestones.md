@@ -3,12 +3,12 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-11-02):** v0.1–v0.4 are shipped. v0.4 (observability/eval,
-Clef-Flash decision adapter, 40-case dataset + `harness calibrate`, MCP tool source)
-is complete; a live Clef-Flash classification run is the only pending evidence and
-waits on Cloudflare's daily free quota reset. v0.5 shipped 2026-11-02 (5 of 5); v0.6 shipped 2026-11-02 (all four items).
-schema, entry-points, the architecture/ADR pass, the README recording and the
-read-only web widget. 108 tests, ruff + `mypy --strict` clean.
+**Current state (2026-11-03):** v0.1–v0.5 are shipped and v0.6 (scale-out) is
+complete. v0.5 delivered the manifest schema, entry-points discovery, the
+architecture/ADR pass, the README recording and the read-only web widget; v0.6
+delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
+execution. 139 tests, ruff + `mypy --strict` clean. The four v0.6 proofs are in
+[`showcase-v0.6.md`](showcase-v0.6.md).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
 repo is operated, so it is recorded here:
@@ -132,6 +132,8 @@ Version bumped to 0.4.0.
 All four items shipped: subagents (ADR-0019), MLflow exporter (ADR-0020), service
 auth (ADR-0021), parallel tool execution (ADR-0022). Version stays 0.5.0 until a
 release is cut; v0.6 is the scale-out milestone, not a version bump by itself.
+Run [`showcase-v0.6.md`](showcase-v0.6.md) for the four commands and the evidence
+each one leaves.
 
 - [x] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
       ADR-0019. `subagents:` in the manifest becomes `spawn_<name>(task)`,
@@ -151,7 +153,11 @@ release is cut; v0.6 is the scale-out milestone, not a version bump by itself.
       sent and the token never lands in a URL. No token means loopback only, and
       `harness serve` refuses `0.0.0.0` with an explicit message. Verified live:
       page 200, `/api/runs` 401 without the token, 200 with it, 401 with a wrong
-      one; `--host 0.0.0.0` without a token exits 2. 6 tests.
+      one; `--host 0.0.0.0` without a token exits 2. 7 tests. The page was
+      served but not *rendered* until 2026-11-03: a Python `\n` had put a real
+      newline inside the inline JS, the script failed to parse, and the page sat
+      on "loading runs…". `INDEX_HTML` is now a raw string and a test asserts the
+      escapes survive.
 - [x] MLflow exporter as the second `Exporter`
       ADR-0020. One rigging run per MLflow run over the `2.0` tracking REST API
       (`runs/create`, `runs/log-batch`, `runs/update`), no SDK and no extra:
@@ -167,10 +173,12 @@ release is cut; v0.6 is the scale-out milestone, not a version bump by itself.
       approval) and finish (spans, `on_tool_result`, events, messages) stay
       serial and in declared order, so approvals cannot race and `seq` stays
       contiguous. A raising third-party tool becomes an `is_error` result. A
-      `tool_batch` event records the mode. Verified live on `qwen3:8b`: one
+      `tool_batch` event records the mode for any multi-call response, so an eval
+      can tell a parallel batch from a serial one. Verified live on `qwen3:8b`: one
       response with two calls produced `tool_batch {"parallel": true}` and both
-      results. 7 tests (overlap, sequential default, order, approval-before-run,
-      auto-deny isolation, raising tool, guardrail deny).
+      results. 9 tests (overlap, sequential default, serial-mode event, single
+      call is not a batch, order, approval-before-run, auto-deny isolation, raising
+      tool, guardrail deny).
 
 ## Standing rules
 

@@ -49,7 +49,7 @@ that claim seriously: the loop knows about protocols, never about vendors.
 | `Retriever` | `search(query, k) -> list[Chunk]`, `requires_indexing` | Qdrant (default), FTS5 (reference) | v0.3 |
 | `DecisionModel` | `decide(state, questions) -> typed answers + probabilities` | Laya (advisory) | v0.3 |
 | `Exporter` | `span(name, attrs)`, `event(...)` with `gen_ai.*` attrs | OTel→Langfuse, MLflow (run-level), console | v0.4 / v0.6 |
-| `SubagentRunner` | `spawn(spec, task) -> SubagentResult` | not implemented | v0.6 |
+| `SubagentRunner` | `spawn(spec, task) -> SubagentResult` | `spawn_<name>` tool over `run_agent` (ADR-0019) | v0.6 |
 
 Every protocol is defined in `rigging/protocols.py`, one screen each, with no
 imports from the rest of the package. That rule is what makes the swappability
@@ -61,7 +61,7 @@ without touching the loop.
 ```
 spec = load_manifest(path)            # JSON Schema validated
 agent = assemble(spec, registry)      # names → implementations, fail fast on unknown
-run  = eventlog.start_run(spec_hash)  # parent_run_id reserved for v0.6
+run  = eventlog.start_run(spec_hash)  # parent_run_id set for subagents (ADR-0019)
 
 messages = [system(spec.system_prompt + skill_index), user(prompt)]
 for step in range(limits.max_steps):
@@ -103,12 +103,13 @@ CREATE TABLE run_events (
   ts          REAL NOT NULL,
   type        TEXT NOT NULL,   -- run_started | input_received | guardrail_verdict
                                -- model_request | model_delta | reasoning_delta
-                               -- model_response | tool_call | approval_requested
-                               -- approval_verdict | tool_result | budget_check
-                               -- escalation | output_verdict | run_finished | error
+                               -- model_response | tool_batch | tool_call
+                               -- approval_requested | approval_verdict | tool_result
+                               -- budget_check | escalation | output_verdict
+                               -- run_finished | error
   payload     TEXT NOT NULL,   -- JSON, redacted before insert
   span_id     TEXT,
-  parent_run_id TEXT,          -- reserved: v0.6 subagents
+  parent_run_id TEXT,          -- set when this run was spawned as a subagent
   PRIMARY KEY (run_id, seq)
 );
 
@@ -223,8 +224,9 @@ Three properties are deliberate:
   browser's `EventSource` reconnects, which keeps a long agent run from pinning
   a worker forever.
 
-The cost is stated in the ADR: read-only means no interactivity, and loopback
-with no auth means it is a development window, not a deployment.
+The cost is stated in the ADR: read-only means no interactivity, and a token or
+a loopback bind is the whole deployment story — it is a development window, not
+a product.
 
 Auth (ADR-0021) is one bearer token, `RIGGING_SERVICE_TOKEN`, checked with
 `hmac.compare_digest` on every `/api/*` route. `GET /` stays public: it is static
@@ -277,4 +279,5 @@ Approval is deliberately serial: a consequential call must be decided before any
 tool starts, and two calls cannot race for one terminal prompt. The event log
 stays single-writer, so `seq` remains contiguous and the message list keeps the
 model's declared order even though completion order varies. A `tool_batch` event
-records the mode and the call names.
+records the mode and the call names for any multi-call response, so an eval can
+tell a parallel batch from a serial one.

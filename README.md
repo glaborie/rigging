@@ -4,11 +4,13 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.5 shipped (2026-11-02).** The harness includes a registry-driven
-agent loop, event log, MCP tools, OTel/Langfuse tracing, an eval CLI, three
-pluggable decision-model adapters, automatic entry-points discovery, and a
-read-only web view over the same event log. See
-[`docs/milestones.md`](docs/milestones.md) for milestone evidence.
+**Status: v0.5 shipped, v0.6 scale-out complete (2026-11-02).** The harness
+includes a registry-driven agent loop, event log, MCP tools, OTel/Langfuse and
+MLflow tracing, an eval CLI, three pluggable decision-model adapters, automatic
+entry-points discovery, subagents as child runs, opt-in parallel tool execution,
+and a read-only web view over the same event log with bearer-token auth. See
+[`docs/milestones.md`](docs/milestones.md) for milestone evidence and
+[`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) for a four-command demo.
 
 ![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
 
@@ -100,8 +102,19 @@ make serve                      # http://127.0.0.1:8000
 
 The left column lists runs; picking one replays its events and then follows it
 live over SSE (`/api/runs/{id}/stream`). Approvals stay in the loop: the page
-cannot launch a run or answer a guardrail, by design. It binds loopback only and
-has no auth, so exposing it is a deployment decision that belongs to v0.6.
+cannot launch a run or answer a guardrail, by design.
+
+Auth is one bearer token (ADR-0021). Set `RIGGING_SERVICE_TOKEN` (comma-separated
+for rotation) and every `/api/*` route requires it; `GET /` stays public so the
+page can ask for the token, which it keeps in `sessionStorage` and sends in a
+header — never in a URL. With no token configured the server refuses any
+non-loopback bind.
+
+```bash
+RIGGING_SERVICE_TOKEN=demo-token make serve
+curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/runs   # 401
+curl -s -H 'Authorization: Bearer demo-token' http://127.0.0.1:8000/api/runs
+```
 
 ## Decision models: cloud or local
 
@@ -145,6 +158,8 @@ rigging/schema/
   agent.schema.json machine-checkable manifest contract
 examples/b2b-support/   the canonical demo agent
 examples/subagents/     parent + child manifests (v0.6 delegation)
+examples/parallel/      two tools in one response (v0.6 parallel_tools)
+examples/mlflow/        the MLflow exporter smoke agent (v0.6)
 scripts/          demo recording, Langfuse tail, gateway password reset
 tests/            unit + SSE wire fixtures + replay integration
 ```
@@ -156,6 +171,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
 - [`docs/adr/`](docs/adr/) — 22 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
+- [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 
 ## Manifest schema
 
