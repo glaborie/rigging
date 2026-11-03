@@ -151,17 +151,19 @@ one fewer thing that can slow a run down.
 
 ### Filtering by tool
 
-Every trace also carries one tag per tool the run used, plus the list as
-metadata:
+Langfuse derives **Called Tool Names** from the tool observations, so the filter
+`calledToolNames = escalate_to_human` works natively — no tag workaround. That
+needs two things, both now true:
 
-```
-tags: ["tool:escalate_to_human", "tool:load_skill", "tool:lookup_order"]
-metadata.tools_called: "escalate_to_human,load_skill,lookup_order"
-```
+- each tool runs as a `TOOL` observation named after the tool
+  (`gen_ai.tool.name`);
+- trace-scope attributes are repeated on every span. They used to live on the
+  root alone, so a session query returned one observation instead of the run,
+  and session-level filters saw nothing.
 
-Filter the traces table by the tag `tool:escalate_to_human`, or use the filter
-search bar. Langfuse's session view does not filter by trace tags, so find the
-trace first and open its session from there.
+Only traces ingested after this change carry the propagated attributes;
+historical traces keep the old shape. For exact-set queries the root span also
+writes `metadata.tools_called = "escalate_to_human,load_skill,lookup_order"`.
 
 ## Reading the output
 

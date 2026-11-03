@@ -104,6 +104,19 @@ def _content(spec: AgentSpec, *, input_value: Any = None,
     return attrs
 
 
+def _generation_output(response: ModelResponse) -> Any:
+    """What a generation span records: text, tool calls, or both.
+
+    Both happen in one turn ("let me check that" + `check_pricing`). Recording
+    only the text hid the call from Langfuse and from the ATIF export, which left
+    a tool result in the trace with no matching call.
+    """
+    calls = [{"name": c.name, "arguments": c.arguments} for c in response.tool_calls]
+    if calls and response.message.content:
+        return {"content": response.message.content, "tool_calls": calls}
+    return calls or response.message.content or None
+
+
 def _trace_tags() -> dict[str, Any]:
     """`RIGGING_TRACE_TAGS` → Langfuse trace tags, for filtering a run in the UI.
 
@@ -116,21 +129,17 @@ def _trace_tags() -> dict[str, Any]:
 
 
 def _tool_attributes(tools: set[str]) -> dict[str, Any]:
-    """`tool:<name>` trace tags + a `tools_called` metadata list.
+    """The tools a run called, as trace metadata.
 
-    Langfuse maps `langfuse.trace.tags` and `langfuse.trace.metadata.*` onto the
-    trace, and either can be set from any span — which is the only way to do it
-    here, because the root span only learns which tools ran once the loop ends.
-    Tags are exact-match filters in the UI, so one tag per tool beats a joined
-    string: `tool:escalate_to_human`.
+    Langfuse's own `calledToolNames` filter reads the tool observations, so this
+    is for exact-set queries and for other exporters — not a tag workaround.
+    The root span only learns the set once the loop ends, which is why it is
+    written at span end rather than start.
     """
     if not tools:
         return {}
     names = sorted(tools)
-    tags = [*_trace_tags().get("langfuse.trace.tags", []),
-            *(f"tool:{name}" for name in names)]
     return {
-        "langfuse.trace.tags": tags,
         "langfuse.trace.metadata.tools_called": ",".join(names),
         "rigging.tools_called": ",".join(names),
     }
@@ -416,9 +425,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             "gen_ai.usage.output_tokens": response.usage.output_tokens,
             "gen_ai.response.finish_reason": response.finish_reason,
             "rigging.tool_calls": len(response.tool_calls),
-            **_content(spec, output_value=response.message.content or [
-                {"name": c.name, "arguments": c.arguments} for c in response.tool_calls
-            ] or None),
+            **_content(spec, output_value=_generation_output(response)),
         })
         log.append(run_id, "model_response", {
             "content": response.message.content,

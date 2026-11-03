@@ -45,8 +45,12 @@ experiment, not the agent, so a manifest must not hard-code them. Tags are
 labels, not content: `capture_content: false` still sends them. Verified on
 cloud.langfuse.com — trace tags `["bench","opencode-go/deepseek-v4.1-flash","rep-1"]`.
 
-Every trace also tags the tools it used (`tool:<name>`) and writes a
-`tools_called` metadata list. Both are set when the root span ends, which is the
-only point where the set is known; Langfuse maps them from any span, so the root
-is enough. That is what makes "show me every run that escalated" a filter rather
-than a search through transcripts.
+Every trace also records the tools it used as `metadata.tools_called`, written
+when the root span ends (the only point where the set is known). Langfuse's
+native `calledToolNames` filter reads the `TOOL` observations themselves, so the
+metadata is for exact-set queries rather than a tag workaround.
+
+Trace-scope attributes (`session.id`, tags, user id) are repeated on every span,
+not just the root. Langfuse aggregates and filters per observation: with
+`session.id` only on the root, a session query returned a single row and
+session-level filters (including tool names) saw nothing.

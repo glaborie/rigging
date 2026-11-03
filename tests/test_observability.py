@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import json
 
 import yaml
 
@@ -377,8 +378,8 @@ def test_tags_are_labels_so_capture_content_off_keeps_them(tmp_path, monkeypatch
     assert "langfuse.observation.input" not in attributes
 
 
-def test_tool_names_become_trace_tags_and_metadata(tmp_path, monkeypatch):
-    """Langfuse can only filter on what the trace carries: tag every tool used."""
+def test_tool_names_become_trace_metadata(tmp_path, monkeypatch):
+    """Langfuse filters called tools natively; metadata is for exact-set queries."""
     import rigging.loop as loop
 
     exporter = RecordingExporter()
@@ -393,11 +394,9 @@ def test_tool_names_become_trace_tags_and_metadata(tmp_path, monkeypatch):
     ]))
 
     root = next(attrs for name, attrs in exporter.ended if name == "invoke_agent")
-    tags = root["langfuse.trace.tags"]
-    assert "tool:sha256_hex" in tags
-    assert {"bench", "my-model"} <= set(tags), "bench tags must survive the merge"
     assert root["langfuse.trace.metadata.tools_called"] == "sha256_hex"
     assert root["rigging.tools_called"] == "sha256_hex"
+    assert "tool:sha256_hex" not in (root.get("langfuse.trace.tags") or [])
 
 
 def test_a_run_without_tools_carries_no_tool_tags(tmp_path, monkeypatch):
@@ -414,3 +413,50 @@ def test_a_run_without_tools_carries_no_tool_tags(tmp_path, monkeypatch):
     root = next(attrs for name, attrs in exporter.ended if name == "invoke_agent")
     assert "langfuse.trace.tags" not in root
     assert "rigging.tools_called" not in root
+
+
+def test_generation_output_keeps_text_and_tool_calls(tmp_path, monkeypatch):
+    """A turn that says 'checking' and calls a tool must record both.
+
+    Recording only the text left the call out of the trace, so the ATIF export
+    saw a tool result with no matching call.
+    """
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, tools=["sha256_hex"], observability={"exporters": ["console"]})
+
+    run_agent(spec, "hash it", log=EventLog(tmp_path / "t.db"), client=FakeClient([
+        {"role": "assistant", "content": "checking",
+         "tool_calls": [{"id": "1", "name": "sha256_hex", "arguments": {"text": "x"}}]},
+        {"role": "assistant", "content": "done"},
+    ]))
+
+    first_chat = next(attrs for name, attrs in exporter.ended if name == "chat")
+    output = json.loads(first_chat["langfuse.observation.output"])
+    assert output["content"] == "checking"
+    assert output["tool_calls"] == [{"name": "sha256_hex", "arguments": {"text": "x"}}]
+
+
+def test_langfuse_exporter_repeats_trace_attributes_on_every_span():
+    """Langfuse filters per observation: session.id cannot live on the root only."""
+    import rigging.observability as obs
+
+    class FakeSpan:
+        def __init__(self, name, attributes):
+            self.name = name
+            self.attributes = dict(attributes)
+
+    class FakeTracer:
+        def start_span(self, name, context=None, attributes=None):
+            return FakeSpan(name, attributes or {})
+
+    exporter = obs.LangfuseExporter(endpoint="http://127.0.0.1:1", public_key="pk",
+                                    secret_key="sk")
+    exporter._tracer = FakeTracer()
+
+    exporter.start_span("invoke_agent", {"session.id": "s_1", "langfuse.trace.tags": ["bench"]})
+    child = exporter.start_span("execute_tool", {"gen_ai.tool.name": "escalate_to_human"})
+
+    assert child.attributes["session.id"] == "s_1"
+    assert child.attributes["langfuse.trace.tags"] == ["bench"]
+    assert child.attributes["gen_ai.tool.name"] == "escalate_to_human"

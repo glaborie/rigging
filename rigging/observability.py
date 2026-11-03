@@ -27,6 +27,17 @@ from typing import Any
 
 from rigging.config import settings
 
+# Attributes that describe the whole trace. Langfuse reads them per observation
+# when filtering or aggregating (session views, tool filters), so they cannot
+# live on the root span alone.
+_TRACE_SCOPE_KEYS = (
+    "session.id",
+    "langfuse.session.id",
+    "langfuse.user.id",
+    "user.id",
+    "langfuse.trace.tags",
+)
+
 
 class ConsoleExporter:
     """Prints span start/end. Deliberately boring; useful for wiring and tests."""
@@ -74,6 +85,7 @@ class LangfuseExporter:
         self._tracer: Any = None
         self._service_name = service_name
         self._stack: list[Any] = []  # span stack: children must nest under the run
+        self._trace_scope: dict[str, Any] = {}  # trace-level attrs to repeat on each span
 
     def _tracer_obj(self) -> Any:
         if self._tracer is None:
@@ -97,12 +109,22 @@ class LangfuseExporter:
 
     def start_span(self, name: str, attributes: dict[str, Any]) -> Any:
         # Nest under the enclosing span, or Langfuse shows a trace per span instead
-        # of one trace with observations. `session.id` on the root groups turns.
+        # of one trace with observations.
         from opentelemetry import trace as ot_trace
 
         tracer = self._tracer_obj()
+        attrs = self._attributes(attributes)
+        # Langfuse aggregates and filters per observation, not only per trace:
+        # `session.id` on the root alone leaves child rows out of session views
+        # and out of session-level filters (calledToolNames among them). Capture
+        # the trace-scope attributes from the root and put them on every span.
+        for key in _TRACE_SCOPE_KEYS:
+            if key in attrs and key not in self._trace_scope:
+                self._trace_scope[key] = attrs[key]
+        for key, value in self._trace_scope.items():
+            attrs.setdefault(key, value)
         ctx = ot_trace.set_span_in_context(self._stack[-1]) if self._stack else None
-        span = tracer.start_span(name, context=ctx, attributes=self._attributes(attributes))
+        span = tracer.start_span(name, context=ctx, attributes=attrs)
         self._stack.append(span)
         return span
 
