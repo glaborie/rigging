@@ -195,6 +195,18 @@ def test_a_token_over_plain_http_is_refused_off_loopback():
     check_bind("127.0.0.1", ["secret"])
 
 
+def test_a_trusted_proxy_list_that_trusts_everyone_is_refused():
+    """`*` makes X-Forwarded-For spoofable, so it is a startup error, not a warning."""
+    from rigging.service import check_trusted_proxies
+
+    for value in ("*", "127.0.0.1,*", "0.0.0.0/0", "::/0"):
+        with pytest.raises(ValueError, match="trust"):
+            check_trusted_proxies(value)
+    check_trusted_proxies("127.0.0.1,::1")
+    check_trusted_proxies("10.0.0.0/8")
+    check_trusted_proxies("")  # trust nobody; the socket peer is the key
+
+
 # ------------------------------------------------------- headers and rate limit
 
 

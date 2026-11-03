@@ -65,6 +65,12 @@ class Settings(BaseSettings):
     service_allow_plaintext: bool = Field(
         default=False, validation_alias="RIGGING_SERVICE_ALLOW_PLAINTEXT"
     )
+    # Which peers may set X-Forwarded-For, and therefore choose the rate-limit
+    # key. Default is a proxy on the same host. Never "*" (checked at startup).
+    service_trusted_proxies: str = Field(
+        default="127.0.0.1,::1",
+        validation_alias="RIGGING_SERVICE_TRUSTED_PROXIES",
+    )
 
     # subagents (ADR-0019): how deep spawn_* tools may nest. Enforced at runtime,
     # not per manifest, so a manifest cannot promote itself.

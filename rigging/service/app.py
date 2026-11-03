@@ -155,6 +155,34 @@ def check_bind(
     )
 
 
+def check_trusted_proxies(value: str) -> None:
+    """Refuse a trust list that trusts everyone.
+
+    `X-Forwarded-For` is only meaningful because a proxy in the trust list
+    overwrites or appends it. A `*` entry (or an all-addresses network) means any
+    client can pick its own rate-limit bucket and frame another client, so it is
+    refused rather than accepted with a warning.
+    """
+    for entry in (part.strip() for part in value.split(",")):
+        if not entry:
+            continue
+        if entry == "*":
+            raise ValueError(
+                "refusing a trusted-proxy list of '*': every client could choose "
+                "its own rate-limit bucket. Name the proxy address instead."
+            )
+        if "/" in entry:
+            try:
+                network = ipaddress.ip_network(entry, strict=False)
+            except ValueError:
+                continue
+            if network.prefixlen == 0:
+                raise ValueError(
+                    f"refusing trusted proxy {entry!r}: it trusts every address, so "
+                    "X-Forwarded-For is spoofable. Name the proxy address instead."
+                )
+
+
 def _auth_dependency(tokens: tuple[str, ...]) -> Any:
     def require_bearer(request: Request) -> None:
         if not tokens:
@@ -178,6 +206,12 @@ def _rate_limit_dependency(limiter: RateLimiter) -> Any:
 
     Before auth on purpose: a script guessing tokens should hit 429 on its own
     budget, not get unlimited free comparisons against `hmac.compare_digest`.
+
+    The key is `request.client.host`. Whether that is the socket peer or an
+    `X-Forwarded-For` value is decided by the ASGI server *before* the app runs:
+    `harness serve` passes the trusted-proxy list to uvicorn, which rewrites the
+    client only when the immediate peer is in it. The app cannot re-verify that,
+    and must not parse the header itself.
     """
 
     def enforce(request: Request) -> None:

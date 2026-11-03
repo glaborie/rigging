@@ -81,6 +81,9 @@ def _parser() -> argparse.ArgumentParser:
                        help="TLS certificate (PEM); with --ssl-keyfile serves https")
     serve.add_argument("--ssl-keyfile", default=None,
                        help="TLS private key (PEM)")
+    serve.add_argument("--trusted-proxies", default=None,
+                       help="comma-separated peers allowed to set X-Forwarded-For "
+                            "(default: 127.0.0.1,::1; never '*')")
 
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
@@ -265,7 +268,7 @@ def cmd_calibrate(args: argparse.Namespace) -> int:
 
 def cmd_serve(args: argparse.Namespace) -> int:
     try:
-        from rigging.service import check_bind, create_app
+        from rigging.service import check_bind, check_trusted_proxies, create_app
     except ModuleNotFoundError:
         print("`harness serve` needs the [service] extra: uv sync --extra service",
               file=sys.stderr)
@@ -281,9 +284,12 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
     tls = bool(args.ssl_certfile and args.ssl_keyfile)
     tokens = [t.strip() for t in settings.service_token.split(",") if t.strip()]
+    trusted = (args.trusted_proxies if args.trusted_proxies is not None
+               else settings.service_trusted_proxies)
     try:
         check_bind(args.host, tokens, tls=tls,
                    allow_plaintext=settings.service_allow_plaintext)
+        check_trusted_proxies(trusted)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
@@ -293,11 +299,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print("rate limit: "
           + (f"{settings.service_rate_limit}/min per client"
              if settings.service_rate_limit > 0 else "off"))
+    print(f"proxy trust: {trusted} (X-Forwarded-For sets the rate-limit key)"
+          if trusted.strip() else
+          "proxy trust: off — every client shares the socket peer's bucket")
     uvicorn.run(
         create_app(db, tokens=tokens,
                    rate_limit_per_minute=settings.service_rate_limit),
         host=args.host, port=args.port,
         ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
+        proxy_headers=True, forwarded_allow_ips=trusted,
         log_level="warning",
     )
     return 0
