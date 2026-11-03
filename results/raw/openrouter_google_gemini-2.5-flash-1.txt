@@ -1,0 +1,27 @@
+
+--- stderr ---
+Traceback (most recent call last):
+  File "/home/glaborie/projects/rigging/.venv/bin/harness", line 10, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/home/glaborie/projects/rigging/rigging/cli.py", line 341, in main
+    return handler(args)
+  File "/home/glaborie/projects/rigging/rigging/cli.py", line 147, in cmd_eval
+    results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only,
+                     ~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                               exporters=args.export, profile=args.profile)
+                               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/glaborie/projects/rigging/rigging/eval.py", line 184, in run_suite
+    run_case(case, spec, db=db_path, approval_allow=allow)
+    ~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/glaborie/projects/rigging/rigging/eval.py", line 105, in run_case
+    result = run_agent(spec, case["prompt"], log=log, approval=ScriptedApproval(approval_allow))
+  File "/home/glaborie/projects/rigging/rigging/loop.py", line 372, in run_agent
+    response = agent.client.complete(request) if stream is None else _streaming_call(agent, request, log, run_id, stream)
+               ~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^
+  File "/home/glaborie/projects/rigging/rigging/client/openai_compat.py", line 77, in complete
+    for delta in self.stream(request):
+                 ~~~~~~~~~~~^^^^^^^^^
+  File "/home/glaborie/projects/rigging/rigging/client/openai_compat.py", line 61, in stream
+    raise TransportError(response.status_code, body, attempt + 1)
+rigging.errors.TransportError: gateway error status=503 attempts=4: {"error":{"message":"No eligible providers for this request (no eligible providers; freellm excluded: cooldown: freellm cooling for 25520ms; ollama excluded: cooldown: ollama cooling for 24921ms)","type":"provider_error","code":"service_unavailable"}}
