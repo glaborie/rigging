@@ -92,8 +92,10 @@ observability: ## check the Langfuse Cloud credentials in .env (emits nothing)
 	@set -a; . ./.env; set +a; \
 	 if [ -z "$$LANGFUSE_PUBLIC_KEY" ] || [ -z "$$LANGFUSE_SECRET_KEY" ]; then \
 	   printf 'LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY are empty in .env\n'; exit 1; fi; \
+	 uv run python -c 'import opentelemetry.sdk, opentelemetry.exporter.otlp.proto.http.trace_exporter' 2>/dev/null || { \
+	   printf 'missing the [langfuse] extra: uv sync --extra langfuse\n'; exit 1; }; \
 	 printf 'langfuse cloud: %s\n' "$${LANGFUSE_HOST:-https://cloud.langfuse.com}"; \
-	 printf 'credentials look set. this target runs no agent, so it emits no spans.\n'; \
+	 printf 'credentials and OTel exporter look set. this target runs no agent, so it emits no spans.\n'; \
 	 printf 'next: make trace  (runs the observability example, then reads the spans back)\n'
 
 trace: ## run the observability example, then read its spans back from Langfuse Cloud
@@ -130,8 +132,8 @@ demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make see
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(filter 1,$(APPROVE)),--yes,)
 
-eval: ## run the b2b-support eval suite over the event log: make eval SUITE=...
-	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),)
+eval: ## run the b2b-support eval suite over the event log: make eval SUITE=... EXPORT=langfuse
+	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),)
 
 up: gateway ## alias for `make gateway`
 

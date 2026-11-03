@@ -54,6 +54,8 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("--db", default=None)
     ev.add_argument("--model", default=None, help="override the manifest model for the suite")
     ev.add_argument("--only", action="append", default=None, help="run only these case ids")
+    ev.add_argument("--export", action="append", default=None,
+                    help="override the manifest exporters (repeatable, e.g. --export langfuse)")
     ev.add_argument("--json", action="store_true")
 
     idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
@@ -140,7 +142,8 @@ def cmd_run(args: argparse.Namespace) -> int:
 def cmd_eval(args: argparse.Namespace) -> int:
     from rigging.eval import render, run_suite
 
-    results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only)
+    results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only,
+                               exporters=args.export)
     if args.json:
         print(json.dumps({"suite": suite.get("name"), "results": [r.__dict__ for r in results]},
                          indent=2, default=str))

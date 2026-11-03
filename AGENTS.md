@@ -15,7 +15,7 @@ Current state: v0.6.3 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (153 offline tests plus a browser smoke test; ruff + `mypy --strict`
+tested (154 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
@@ -130,10 +130,16 @@ There is **no local Langfuse stack** — `docker compose` runs only `omniroute`
 and, under `--profile retrieval`, `qdrant`. Traces go to Langfuse Cloud:
 
 ```bash
-make observability              # checks LANGFUSE_* in .env — runs no agent, emits nothing
+make observability              # checks LANGFUSE_* and the [langfuse] extra — emits nothing
 make trace                      # runs the observability example, then reads the spans back
 make trace MODEL=qwen3:8b       # ...against host Ollama; no gateway container needed
+make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
 ```
+
+The exporter needs the `[langfuse]` extra, which `make install` does not pull:
+`uv sync --extra dev --extra langfuse` (add `--extra service --extra mcp` if you
+use the widget or MCP). Without it the loop silently skips spans — the run
+succeeds and nothing arrives.
 
 `.env` needs `LANGFUSE_HOST` (defaults to `https://cloud.langfuse.com`),
 `LANGFUSE_PUBLIC_KEY` and `LANGFUSE_SECRET_KEY`. The keys are read through

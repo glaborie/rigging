@@ -152,12 +152,23 @@ def run_case(case: dict[str, Any], spec: AgentSpec, *, db: Path, approval_allow:
                       tools=tools)
 
 
+def _with_exporters(spec: AgentSpec, exporters: list[str] | None) -> AgentSpec:
+    """`--export` overrides the manifest list, so a shared demo manifest stays key-free."""
+    if exporters is None:
+        return spec
+    return spec.model_copy(update={
+        "observability": spec.observability.model_copy(update={"exporters": exporters})
+    })
+
+
 def run_suite(path: str | Path, *, db: str | Path | None = None, model: str | None = None,
-              only: list[str] | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
+              only: list[str] | None = None,
+              exporters: list[str] | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
     suite = _load_suite(path)
     spec = load_manifest(str(Path(path).parent / suite["manifest"]))
     if model:
         spec = spec.model_copy(update={"model": model})
+    spec = _with_exporters(spec, exporters)
     db_path = Path(db or "runs/eval.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     allow = (suite.get("approval") or "deny").lower() == "allow"

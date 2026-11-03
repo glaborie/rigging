@@ -84,6 +84,7 @@ uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transc
 make seed                                        # deterministic demo.db (seed=7)
 make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b                          # event-log predicates, per-case table
+make eval MODEL=qwen3:8b EXPORT=langfuse          # ...and one Langfuse trace per case
 ```
 
 No API key is required for either path. The gateway is OpenAI-compatible HTTP,
