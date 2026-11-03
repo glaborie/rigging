@@ -22,7 +22,7 @@ services:
       - "20128:20128"
     environment:
       PORT: "20128"
-      OMNIROUTE_SERVER_HOST: 127.0.0.1
+      OMNIROUTE_SERVER_HOST: 0.0.0.0
       # Bootstrap dashboard password, seeded on FIRST boot only. Change it in
       # Dashboard -> Settings -> Security afterwards; later restarts ignore it.
       INITIAL_PASSWORD: ${OMNIROUTE_INITIAL_PASSWORD:-CHANGEME}
