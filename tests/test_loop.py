@@ -46,6 +46,26 @@ def _spec(**kw: Any) -> AgentSpec:
     return AgentSpec(**base)
 
 
+def test_settings_retry_budget_reaches_the_client(monkeypatch: Any) -> None:
+    """RIGGING_MAX_RETRIES was dead config: the client kept its default 3."""
+    import rigging.client.openai_compat as client_mod
+    from rigging import loop
+
+    captured: dict[str, Any] = {}
+
+    class Capturing:
+        def __init__(self, base_url: str, api_key: str = "not-needed", **kw: Any) -> None:
+            captured.update(kw)
+
+    monkeypatch.setattr(client_mod, "OpenAICompatClient", Capturing)
+    monkeypatch.setattr(loop.settings, "max_retries", 7)
+
+    loop.assemble(_spec(), registry=Registry())
+
+    assert captured["max_retries"] == 7
+    assert captured["timeout"] == loop.settings.request_timeout_s
+
+
 def _registry() -> Registry:
     reg = Registry()
 
