@@ -1,6 +1,6 @@
 # ADR-0021: Bearer tokens now, OIDC later, and no token means loopback only
 
-**Status:** Accepted (extends ADR-0018)
+**Status:** Accepted (extends ADR-0018; supersedes the auth clause of ADR-0017)
 
 ## Context
 

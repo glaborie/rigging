@@ -15,8 +15,8 @@ Current state: v0.6.0 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (139 tests, ruff + `mypy --strict` clean). All four exit-criteria demos
-verified live.
+tested (139 offline tests plus a browser smoke test; ruff + `mypy --strict`
+clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
 
@@ -39,7 +39,8 @@ verified live.
    alternatives rejected). One page, honest about costs.
 7. **No new dependency without justification.** Core deps are `httpx`,
    `pydantic`, `pydantic-settings`, `pyyaml`. Everything heavier goes behind an
-   extra (`[qdrant]`, `[laya]`, `[langfuse]`, `[mcp]`, `[service]`). The widget is
+   extra (`[qdrant]`, `[laya]`, `[langfuse]`, `[mcp]`, `[service]`, `[browser]`).
+   The widget is
    `[service]`, and `make install` pulls it so `make check` exercises it.
 8. **No LLM-as-judge** in guardrails or evals (ADR-0009, ADR-0017).
 9. **No silent feature: the CLI says what is not built.** Unimplemented commands
@@ -76,7 +77,8 @@ examples/subagents/                parent + child manifests (v0.6)
 examples/parallel/                 two tools in one response (v0.6)
 examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
-tests/                             unit, SSE wire fixtures, loop invariants
+tests/                             unit, SSE wire fixtures, loop invariants,
+                                   and the opt-in browser smoke test
 ```
 
 ## Workflow
@@ -85,6 +87,7 @@ tests/                             unit, SSE wire fixtures, loop invariants
 uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
+make test-browser            # opt-in: render the web view in headless Chromium
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)
 ```
@@ -165,7 +168,9 @@ task complete, 30 tests green). v0.2 shipped (tag `v0.2.0`, release published). 
 guardrails + approval live in the demo, fts5/qdrant retrievers, seeded fixture DB,
 `harness index`. All four exit-criteria demos verified live. v0.4 shipped 2026-10-29:
 OTel → Langfuse observability, eval CLI over recorded transcripts (`--replay`),
-MCP consumption. v0.5 is next: 60-second terminal recording in README, FastAPI web widget.
+MCP consumption. v0.5 shipped the web view and the recorded demo; v0.6.0
+(2026-11-03) added subagents, the MLflow exporter, service auth and opt-in
+parallel tool execution. Start from the first unticked box above that.
 
 ## Things that will tempt you and are wrong here
 
@@ -182,3 +187,5 @@ MCP consumption. v0.5 is next: 60-second terminal recording in README, FastAPI w
 - Making Laya the hard gate → ADR-0009; it is advisory until
   `tests/data/decisions.jsonl` shows its calibration.
 - Writing a web UI before v0.5 → ADR-0017. The REPL comes first.
+- Treating a 200 from `/` as proof the page works → ADR-0018 postscript; only
+  `make test-browser` parses and runs the inline JS.

@@ -1,6 +1,6 @@
 # ADR-0022: Parallel tool execution is opt-in, approval stays serial
 
-**Status:** Accepted
+**Status:** Accepted (supersedes the parallel-tool clause of ADR-0017)
 
 ## Context
 

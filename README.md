@@ -116,6 +116,19 @@ curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/runs   # 401
 curl -s -H 'Authorization: Bearer demo-token' http://127.0.0.1:8000/api/runs
 ```
 
+The page's JavaScript is tested in a real browser, not only over HTTP:
+
+```bash
+make browser-install            # playwright + Chromium (~120 MB, once)
+make test-browser               # loads the page, asserts the run list renders
+```
+
+That test exists because v0.6.0 shipped a page that answered 200 and rendered
+nothing: a Python `\n` had become a real newline inside the inline JS, so the
+script never parsed. The route tests could not see it; the browser test can. The
+postscript in [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)
+has the honest version.
+
 ## Decision models: cloud or local
 
 Decision models share the `DecisionModel` protocol and registry; select one by
@@ -126,14 +139,26 @@ cloud quota, or extra Python dependency. Requires Ollama 0.35 or later.
 ollama pull d1-omni                 # local 600M model (~850 MB)
 uv run harness tools --kind decision_model
 uv run harness calibrate d1-omni --dataset tests/data/decisions.jsonl
+uv run harness calibrate respan/span-01-lite:free --dataset tests/data/decisions.jsonl
 ```
 
-For this labelled 42-case dataset, the live local run returned **accuracy
-0.548, multiclass Brier 0.479**. That is an advisory signal, not a safety gate;
-deterministic guardrails remain authoritative. The local endpoint defaults to
-`http://localhost:11434`; set `OLLAMA_BASE_URL` to override it. Other registered
-options are `respan/span-01-lite:free` (OpenRouter) and
-`@cf/cloudflare/clef-flash` (FreeLLMAPI).
+Both scored models — one cloud, one local — ran the **same 42-case** labelled
+dataset (`tests/data/decisions.jsonl`; 22 `no`, 20 `yes`). Accuracy is the argmax
+choice against the label; Brier is the multiclass Brier score, where lower is
+better.
+
+| model | where | n | accuracy | Brier |
+|---|---|--:|--:|--:|
+| `respan/span-01-lite:free` | OpenRouter (cloud) | 42 | **0.833** | **0.269** |
+| `d1-omni` | Ollama (local) | 42 | 0.548 | 0.479 |
+| `@cf/cloudflare/clef-flash` | FreeLLMAPI | — | not run | — |
+
+That is an advisory signal, not a safety gate; deterministic guardrails remain
+authoritative (ADR-0009). The cloud model scores better; the local model is the
+zero-key fallback. `@cf/cloudflare/clef-flash` passes its contract tests but its
+live scoring run hit the daily free quota (HTTP 429), so it has no numbers yet.
+The local endpoint defaults to `http://localhost:11434`; set `OLLAMA_BASE_URL` to
+override it.
 
 ## Repository layout
 
@@ -197,10 +222,16 @@ for the registration pattern. Entry-points are discovered automatically when
 ## Non-goals
 
 Deliberately not built (see [ADR-0017](docs/adr/0017-deliberate-non-goals.md)):
-agent long-term memory, multi-agent orchestration in v1, serving MCP, LLM-as-judge
-guardrails or evals, user auth before the service milestone, a *write-capable* web
-UI (v0.5 ships a read-only view, ADR-0018), model fine-tuning, parallel tool
-execution, Windows-native support, a plugin
+agent long-term memory, serving MCP, LLM-as-judge guardrails or evals, a
+*write-capable* web UI, model fine-tuning, Windows-native support, and a plugin
+marketplace beyond entry points.
+
+Four items were on that list and have since shipped, each with its own ADR:
+the read-only web view (v0.5, [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)),
+subagents (v0.6, [ADR-0019](docs/adr/0019-subagents-are-child-runs.md)),
+service auth (v0.6, [ADR-0021](docs/adr/0021-service-auth-is-a-bearer-token.md)),
+and opt-in parallel tool execution (v0.6, [ADR-0022](docs/adr/0022-parallel-tool-execution-is-opt-in.md)).
+ADR-0017 records the supersessions; it is not silently edited away.
 
 
 ## Development TODO

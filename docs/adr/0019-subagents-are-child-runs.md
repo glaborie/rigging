@@ -1,6 +1,6 @@
 # ADR-0019: A subagent is a child run in the same event log
 
-**Status:** Accepted
+**Status:** Accepted (supersedes the multi-agent clause of ADR-0017)
 
 ## Context
 

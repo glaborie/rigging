@@ -73,7 +73,7 @@ def events(db: str | Path, run_id: str, *, after_seq: int = 0) -> list[dict[str,
 
 
 def _sse(data: dict[str, Any]) -> str:
-    """One default-named SSE frame: `EventSource.onmessage` sees every event."""
+    """One default-named SSE frame, so any client (`curl`, `EventSource`) sees it."""
     return f"data: {json.dumps(data, default=str)}\n\n"
 
 
@@ -104,7 +104,7 @@ def _tail(db: str | Path, run_id: str, idle_seconds: float, max_seconds: float) 
             yield "event: end\ndata: {\"reason\": \"max_seconds\"}\n\n"
             return
         if now - quiet_since > idle_seconds:
-            # The run is still going; the browser's EventSource reconnects.
+            # Still running: end the stream and let the page reopen it on demand.
             yield "event: end\ndata: {\"reason\": \"idle\"}\n\n"
             return
         time.sleep(POLL_INTERVAL_S)

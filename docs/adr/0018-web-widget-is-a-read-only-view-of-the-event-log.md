@@ -1,6 +1,7 @@
 # ADR-0018: The web widget is a read-only view of the event log
 
-**Status:** Accepted (supersedes the "no web UI before the v0.5 stretch" clause of ADR-0017)
+**Status:** Accepted (supersedes the "no web UI before the v0.5 stretch" clause of
+ADR-0017; its no-auth clause is superseded by ADR-0021)
 
 ## Context
 
@@ -29,15 +30,17 @@ Ship `rigging/service/` behind the existing `[service]` extra:
   are whatever the redactor wrote (hard rule 5) — the service never re-reads a raw
   payload, because there is none to read.
 - **SSE, not WebSocket.** Live updates are `text/event-stream` from an in-process
-  generator that tails `run_events` by `seq`. SSE needs no protocol upgrade, works
-  with `EventSource` and `curl`, and the browser reconnects on its own when a
-  still-running run outlives the connection.
+  generator that tails `run_events` by `seq`. SSE needs no protocol upgrade and
+  works with `curl`. (ADR-0021 later moved the page to `fetch` +
+  `ReadableStream` so it can send a bearer header; the wire format is unchanged,
+  and the page no longer reconnects on its own.)
 - **No build step, no CDN.** One HTML page with vanilla JS is served from the same
   app. A reviewer can read the whole UI in a minute and there is no `node_modules`
   in a Python portfolio piece.
-- **Local by default, no auth.** `harness serve` binds `127.0.0.1`. The service is
-  a development window onto a local database; exposing it is a deployment decision
-  that would need its own ADR (the v0.6 service + auth milestone).
+- **Local by default, no auth (superseded by ADR-0021).** `harness serve` binds
+  `127.0.0.1`. The service is a development window onto a local database;
+  exposing it is a deployment decision that would need its own ADR (the v0.6
+  service + auth milestone). ADR-0021 added a bearer token for that case.
 - **Optional dependency, honest failure.** `harness serve` without the extra
   prints the `uv sync --extra service` hint and exits 2 (hard rule 9).
 
@@ -58,3 +61,25 @@ rather than push notifications, and one more module that mypy must keep honest.
   approval policy; would need an auth story before it could be safe.
 - **A separate metrics database for the UI**: the event log already answers every
   question the page asks.
+
+## Postscript (2026-11-03): the page never rendered
+
+The widget shipped in v0.5 and was re-verified in v0.6 with "page 200" — and the
+page rendered nothing. `INDEX_HTML` was a normal Python string, so `'\n\n'` in the
+inline JavaScript became a **real newline inside a single-quoted string**. The
+browser rejected the whole script, and the page sat on "loading runs…" while
+`/api/runs` answered 200. The route tests passed because they read the page as
+text; none of them parsed it, and the evidence line checked the shell, not the
+render.
+
+Three changes came out of it:
+
+- `INDEX_HTML` is a raw string, so JS escapes survive the trip through Python.
+- A failed `loadRuns()` reports the failure instead of leaving the placeholder up.
+- `tests/test_service_browser.py` loads the page in headless Chromium and asserts
+  the run list renders, with a page-error listener. It is opt-in (`make
+  test-browser`, `[browser]` extra) and runs as its own CI job.
+
+The lesson is recorded here rather than in a commit nobody reads: for a UI, a 200
+is not evidence that it works. A route test proves the bytes were sent; only a
+browser proves they ran.

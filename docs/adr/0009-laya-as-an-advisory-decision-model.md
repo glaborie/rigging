@@ -16,7 +16,7 @@ service.
 
 `DecisionModel` protocol in core. `LayaDecisionModel` behind the `rigging[laya]`
 extra, used as an *advisory* signal: `p_bad > threshold` flags/escalates. The
-deterministic regex/allow-list check stays the hard gate in v1. A ~40-case labelled
+deterministic regex/allow-list check stays the hard gate in v1. A 42-case labelled
 set in `tests/data/decisions.jsonl`, scored by the eval layer, decides whether Laya
 ever earns gate authority.
 

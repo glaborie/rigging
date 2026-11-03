@@ -5,7 +5,7 @@ Status: v0.3, behind the `[laya]` extra.
 Why advisory: Reflection's own model card says Laya is "a fast base to specialise,
 not a zero-shot decision engine" (0.362 vs 0.766 accuracy on their typed-decisions
 benchmark). Its authority has to be earned by measuring it on
-`tests/data/decisions.jsonl` (~40 labelled cases from this domain) through
+`tests/data/decisions.jsonl` (42 labelled cases from this domain) through
 `harness eval`. Until that table exists, the deterministic guardrails are the gate.
 """
 

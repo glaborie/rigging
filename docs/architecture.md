@@ -220,9 +220,10 @@ Three properties are deliberate:
 - **No second store.** The page renders whatever is in the log, so it cannot
   drift from `harness runs` or the eval CLI.
 - **No push infrastructure.** The SSE generator polls `run_events` every 300 ms
-  by `seq`. A run that outlives `idle_seconds` closes the connection and the
-  browser's `EventSource` reconnects, which keeps a long agent run from pinning
-  a worker forever.
+  by `seq`. A run that outlives `idle_seconds` closes the connection; the page
+  does not auto-reconnect (it uses `fetch` + `ReadableStream` so it can send a
+  bearer header), so the reader reopens the stream by picking the run again. That
+  keeps a long agent run from pinning a worker forever.
 
 The cost is stated in the ADR: read-only means no interactivity, and a token or
 a loopback bind is the whole deployment story — it is a development window, not
@@ -235,6 +236,13 @@ returns 401, keeping it in `sessionStorage`. The stream is consumed with
 `fetch` + `ReadableStream` rather than `EventSource`, because only the former can
 send a header — the token never appears in a URL. With no token configured,
 `harness serve` refuses any non-loopback bind instead of opening a port.
+
+The page is a real browser test, not just a route test:
+`tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in
+headless Chromium, and asserts the run list renders with no page error
+(`make test-browser`, `[browser]` extra, its own CI job). It exists because
+v0.6.0 shipped a page whose inline JS failed to parse while `GET /` still
+answered 200 — see the postscript in ADR-0018.
 
 ## 9. Subagents (v0.6, ADR-0019)
 

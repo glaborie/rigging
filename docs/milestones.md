@@ -7,8 +7,8 @@ the first point at which a stranger can run it and understand it.
 released as v0.6.0. v0.5 delivered the manifest schema, entry-points discovery, the
 architecture/ADR pass, the README recording and the read-only web widget; v0.6
 delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
-execution. 139 tests, ruff + `mypy --strict` clean. The four v0.6 proofs are in
-[`showcase-v0.6.md`](showcase-v0.6.md).
+execution. 139 offline tests plus a browser smoke test; ruff + `mypy --strict`
+clean. The four v0.6 proofs are in [`showcase-v0.6.md`](showcase-v0.6.md).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
 repo is operated, so it is recorded here:
@@ -96,16 +96,18 @@ The repo stays **private** for now by decision; flipping it public is the remain
 
 - [x] `Exporter` + OTel `gen_ai.*` spans, OTLP → Langfuse behind `[langfuse]`; live nested trace verified
 - [x] `harness eval <suite.yaml>` over event-log predicates; cost/latency/pass table
-- [x] decision dataset (`tests/data/decisions.jsonl`, 40 labelled cases) + `rigging/decide/calibrate.py` scorer + `harness calibrate` CLI; deterministic safety checks stay authoritative. Live scoring of Clef-Flash pending the Cloudflare quota reset
+- [x] decision dataset (`tests/data/decisions.jsonl`, 42 labelled cases) + `rigging/decide/calibrate.py` scorer + `harness calibrate` CLI; deterministic safety checks stay authoritative. Live scoring of Clef-Flash pending the Cloudflare quota reset
 - [x] FreeLLMAPI adapter for `@cf/cloudflare/clef-flash` via `/v1/decisions`; contract tests pass. Live request reached Cloudflare but returned HTTP 429 (daily free quota exhausted), so successful live classification is pending
 - [x] OpenRouter adapter for `respan/span-01-lite:free` via `/api/v1/systemone`; Span-01 accepts only `noul` questions, so choice questions fan out to one noul per option and renormalise. **Live calibration: n=42, accuracy=0.833, Brier=0.269**
+- [x] Ollama SystemOne adapter for `d1-omni` (local, no key). **Live calibration on the same 42 cases: accuracy=0.548, Brier=0.479**
 - [x] MCP tool source behind `[mcp]`, namespaced tools; live stdio echo-server round trip verified (mcp>=2.0)
 - [x] 6–8 golden eval cases for the demo agent; live B2B suite passed 8/8
 
-**v0.4 status: DONE (2026-10-29).** All boxes ticked. Live calibration evidence came
-from `respan/span-01-lite:free` on OpenRouter (n=42, accuracy 0.833, Brier 0.269);
-`@cf/cloudflare/clef-flash` still waits on its daily cloud quota for the same run.
-Version bumped to 0.4.0.
+**v0.4 status: DONE (2026-10-29).** All boxes ticked. Both registered models were
+scored on the same 42-case dataset — `respan/span-01-lite:free` on OpenRouter
+(0.833 / 0.269) and local `d1-omni` (0.548 / 0.479); README has the side-by-side
+table. `@cf/cloudflare/clef-flash` still waits on its daily cloud quota for the
+same run. Version bumped to 0.4.0.
 
 ## v0.5 — the professional finish
 
@@ -152,11 +154,12 @@ and the evidence each one leaves.
       sent and the token never lands in a URL. No token means loopback only, and
       `harness serve` refuses `0.0.0.0` with an explicit message. Verified live:
       page 200, `/api/runs` 401 without the token, 200 with it, 401 with a wrong
-      one; `--host 0.0.0.0` without a token exits 2. 7 tests. The page was
+      one; `--host 0.0.0.0` without a token exits 2. 7 route tests. The page was
       served but not *rendered* until 2026-11-03: a Python `\n` had put a real
       newline inside the inline JS, the script failed to parse, and the page sat
-      on "loading runs…". `INDEX_HTML` is now a raw string and a test asserts the
-      escapes survive.
+      on "loading runs…". `INDEX_HTML` is now a raw string, a failed load says so,
+      and `tests/test_service_browser.py` loads the page in headless Chromium and
+      asserts the run list renders (`make test-browser`, its own CI job).
 - [x] MLflow exporter as the second `Exporter`
       ADR-0020. One rigging run per MLflow run over the `2.0` tracking REST API
       (`runs/create`, `runs/log-batch`, `runs/update`), no SDK and no extra:
