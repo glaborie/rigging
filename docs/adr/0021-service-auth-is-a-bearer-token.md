@@ -52,3 +52,34 @@ put an authenticating proxy in front until OIDC lands.
 - **`--token` CLI flag**: visible in `ps` and shell history.
 - **Auth on `/` too**: then the page cannot prompt for the token it needs.
 - **OIDC now**: real work, wrong milestone; no multi-user requirement exists.
+
+## Postscript (2026-11-03): exposure hardening
+
+A security review of v0.6.1 named four gaps. Three were code, one was
+documentation; all four are closed here rather than deferred to "the proxy".
+
+- **Bearer over plain HTTP is now refused, not just discouraged.** `check_bind`
+  allowed any non-loopback bind once a token was set, which is exactly the
+  configuration that puts the token on the wire in clear text. A non-loopback
+  bind with a token now needs TLS on the socket (`--ssl-certfile`,
+  `--ssl-keyfile`) or the explicit `RIGGING_SERVICE_ALLOW_PLAINTEXT=1` escape.
+  The supported setup — TLS at a proxy, uvicorn on loopback — is in
+  `docs/threat-model.md`.
+- **There is a rate limit.** `rigging/service/ratelimit.py` is a fixed-window,
+  per-client-IP counter (240/min default, `RIGGING_SERVICE_RATE_LIMIT`, `0`
+  disables) that returns `429` + `Retry-After`. It runs **before** the token
+  check so a guessing script spends its own budget. It is deliberately small and
+  in-process: a backstop, not the proxy's limiter.
+- **The XSS surface is stated and reduced.** The token in `sessionStorage` is
+  readable by any same-origin script; that is inherent to a header-based token
+  and accepted for one read-only scope. The page loads no third-party code,
+  escapes every payload, and now serves a per-response CSP nonce that blocks
+  external script/style, framing and form posts. The residual risk is written
+  down, not assumed away.
+- **`docs/threat-model.md`** maps assets, actors, threats, controls and residual
+  risk, and lists what the code does *not* claim (encryption at rest, per-user
+  audit, token expiry, HA). It exists because "read-only" is not "harmless".
+
+Cost: a non-loopback plaintext deployment that used to start now exits 2 with an
+explanation, and the limiter adds one lock acquisition per API request. Both are
+the intended trade.

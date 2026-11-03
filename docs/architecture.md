@@ -237,6 +237,14 @@ returns 401, keeping it in `sessionStorage`. The stream is consumed with
 send a header — the token never appears in a URL. With no token configured,
 `harness serve` refuses any non-loopback bind instead of opening a port.
 
+Every response carries a CSP with a per-response nonce (the page's own inline
+script and style are the only code allowed to run), plus `nosniff`,
+`no-referrer`, `X-Frame-Options: DENY` and `no-store`. `/api/*` is rate-limited
+per client IP before the token check (240/min default, `429` + `Retry-After`).
+The exposure model — TLS proxy, loopback bind, the `sessionStorage` residual
+risk, and what is explicitly not claimed — is
+[`threat-model.md`](threat-model.md).
+
 The page is a real browser test, not just a route test:
 `tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in
 headless Chromium, and asserts the run list renders with no page error

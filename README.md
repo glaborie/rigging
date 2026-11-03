@@ -4,7 +4,7 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.6.1 released (2026-11-03).** The harness includes a registry-driven
+**Status: v0.6.2 released (2026-11-03).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a read-only web view
@@ -110,6 +110,32 @@ page can ask for the token, which it keeps in `sessionStorage` and sends in a
 header — never in a URL. With no token configured the server refuses any
 non-loopback bind.
 
+`/api/*` is also rate-limited per client IP: 240 requests/minute by default
+(`RIGGING_SERVICE_RATE_LIMIT`, `0` disables). The check runs before the token,
+so a script guessing tokens gets `429` and a `Retry-After` rather than unlimited
+attempts. It is a backstop; the proxy should rate-limit too.
+
+**Exposing it needs TLS.** A bearer token over plain HTTP crosses the network in
+clear text, so `harness serve` refuses a non-loopback bind with a token unless
+`--ssl-certfile/--ssl-keyfile` are given, or `RIGGING_SERVICE_ALLOW_PLAINTEXT=1`
+says the network already protects the link. The supported setup is TLS at a
+reverse proxy with uvicorn on loopback:
+
+```bash
+RIGGING_SERVICE_TOKEN="$(openssl rand -base64 32)" \
+  uv run harness serve --host 127.0.0.1 --port 8000
+# Caddy, with automatic certificates:
+#   view.example.com { reverse_proxy 127.0.0.1:8000 }
+```
+
+`sessionStorage` is readable by any script running on the origin. That is
+accepted here because the page loads no third-party code, escapes every payload
+and can only read; a per-response CSP nonce blocks external script/style and
+framing. It is stated as residual risk, not hidden.
+[`docs/threat-model.md`](docs/threat-model.md) has the threat table, controls,
+deployment checklist and the non-claims (no encryption at rest, no per-user
+audit, no token expiry).
+
 ```bash
 RIGGING_SERVICE_TOKEN=demo-token make serve
 curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:8000/api/runs   # 401
@@ -178,6 +204,7 @@ rigging/            the package (protocols, registry, loop, client, CLI)
 docs/
   architecture.md   how the layers fit and why
   milestones.md     v0.1 → v0.6 with the go-public gate
+  threat-model.md   assets, threats, controls and the deployment baseline
   adr/              one page per decision, numbered
 rigging/schema/
   agent.schema.json machine-checkable manifest contract
@@ -196,6 +223,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
 - [`docs/adr/`](docs/adr/) — 22 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
+- [`docs/threat-model.md`](docs/threat-model.md) — assets, threats, controls, non-claims
 - [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 
 ## Manifest schema
@@ -232,15 +260,6 @@ subagents (v0.6, [ADR-0019](docs/adr/0019-subagents-are-child-runs.md)),
 service auth (v0.6, [ADR-0021](docs/adr/0021-service-auth-is-a-bearer-token.md)),
 and opt-in parallel tool execution (v0.6, [ADR-0022](docs/adr/0022-parallel-tool-execution-is-opt-in.md)).
 ADR-0017 records the supersessions; it is not silently edited away.
-
-
-## Development TODO
-
-See [TODO.md](TODO.md) for ongoing skills development work including:
-- MLOps feature store parity debugging
-- Eval-driven routing architecture design  
-- ML pipeline CD pipeline implementation
-- Verification milestones for production readiness
 
 ## License
 

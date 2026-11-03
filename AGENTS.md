@@ -11,11 +11,11 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.6.1 released (2026-11-03). The loop,
+Current state: v0.6.2 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (139 offline tests plus a browser smoke test; ruff + `mypy --strict`
+tested (150 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
@@ -72,6 +72,7 @@ rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered
 docs/milestones.md                 the task list; definitions of done
+docs/threat-model.md               assets, threats, controls, non-claims
 examples/b2b-support/              the canonical demo (manifest + skills final)
 examples/subagents/                parent + child manifests (v0.6)
 examples/parallel/                 two tools in one response (v0.6)

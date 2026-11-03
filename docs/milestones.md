@@ -4,11 +4,12 @@ Each milestone is shippable on its own. The go-public gate is deliberately early
 the first point at which a stranger can run it and understand it.
 
 **Current state (2026-11-03):** v0.1–v0.5 are shipped and v0.6 (scale-out) is
-released as v0.6.1 (v0.6.0 was tagged, then patched — see the v0.6 section). v0.5
+released as v0.6.2 (v0.6.0 was tagged, then patched for doc drift and the page
+bug in v0.6.1, then hardened in v0.6.2 — see the v0.6 sections). v0.5
 delivered the manifest schema, entry-points discovery, the
 architecture/ADR pass, the README recording and the read-only web widget; v0.6
 delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
-execution. 139 offline tests plus a browser smoke test; ruff + `mypy --strict`
+execution. 150 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean. The four v0.6 proofs are in [`showcase-v0.6.md`](showcase-v0.6.md).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
@@ -134,8 +135,8 @@ same run. Version bumped to 0.4.0.
 
 All four items shipped: subagents (ADR-0019), MLflow exporter (ADR-0020), service
 auth (ADR-0021), parallel tool execution (ADR-0022). **Released as v0.6.0
-(2026-11-03); v0.6.1 is the patch** that aligns the docs and adds the browser
-smoke test for the web view. Run [`showcase-v0.6.md`](showcase-v0.6.md) for the
+(2026-11-03); v0.6.1 aligned the docs and added the browser test; v0.6.2
+hardened the exposure (TLS, rate limit, CSP, threat model).** Run [`showcase-v0.6.md`](showcase-v0.6.md) for the
 four commands and the evidence each one leaves.
 
 - [x] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
@@ -183,6 +184,33 @@ four commands and the evidence each one leaves.
       results. 9 tests (overlap, sequential default, serial-mode event, single
       call is not a batch, order, approval-before-run, auto-deny isolation, raising
       tool, guardrail deny).
+
+## v0.6.2 — security hardening (2026-11-03)
+
+Patch on v0.6.1 from a security review of the web view. No protocol, loop or
+manifest changes.
+
+- [x] **TLS is required to expose the service.** A non-loopback bind with a
+      bearer token is refused unless the socket has TLS (`--ssl-certfile`,
+      `--ssl-keyfile`) or `RIGGING_SERVICE_ALLOW_PLAINTEXT=1` records that the
+      network already protects the link. The supported deployment is a TLS
+      reverse proxy with uvicorn on loopback (ADR-0021 postscript).
+- [x] **Per-client rate limiting on `/api/*`.** Fixed-window, 240/min default
+      (`RIGGING_SERVICE_RATE_LIMIT`, `0` disables), checked before the token so a
+      guessing script spends its own budget; `429` + `Retry-After`. Memory is
+      bounded when keys are attacker-chosen. A backstop, not the proxy's limiter.
+- [x] **CSP and security headers.** Per-response nonce for the page's inline
+      script and style; `default-src 'none'`, `connect-src 'self'`,
+      `frame-ancestors 'none'`; plus `nosniff`, `no-referrer`,
+      `X-Frame-Options: DENY`, `no-store`. The browser test fails on a CSP
+      violation, not just on a blank page.
+- [x] **`docs/threat-model.md`.** Assets, actors, 13 threats with controls and
+      residual risk, the TLS/proxy baseline, and the explicit non-claims
+      (encryption at rest, per-user audit, token expiry, HA). The
+      `sessionStorage` XSS exposure is stated there and in the README.
+- [x] 11 new tests: limiter windows/keys/memory, headers and nonce, 429 before
+      auth, disabled limiter, bind rules. `make check` 150 passed; the browser
+      test still renders the page under the CSP.
 
 ## Standing rules
 
