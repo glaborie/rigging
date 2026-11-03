@@ -1,19 +1,26 @@
 #!/usr/bin/env python3
 """scripts/bench.py: run `harness eval` over models x repeats and publish a results table.
 
-    uv run python scripts/bench.py examples/b2b-support/suite.yaml \
-        --models qwen3:8b other-local-model hosted-model --repeats 5
+    uv run python scripts/bench.py examples/b2b-support/eval.yaml \
+        --models gemini/gemini-3.7-flash --repeats 5 \
+        --cmd "uv run harness eval {suite} --model {model} --profile default"
 
 Writes results/raw/<model>-<rep>.txt, results/summary.json and results/table.md.
 
-Parsing: prefers JSON on stdout (a list of {"case","passed","latency_s","cost_usd","steps"}),
-falls back to scraping "<case> ... PASS|FAIL" lines from the eval table.
+Traces: every rep runs with `--export langfuse` (override with `--export NAME`,
+disable with `--no-export`) and sets RIGGING_TRACE_TAGS, so the harness tags the
+trace `bench,<model>,rep-<n>`. One eval case is one trace.
+
+Parsing: prefers JSON on stdout (the `--json` envelope or a bare list of
+{"case","passed","latency_s","cost_usd","steps"}), falls back to scraping
+"<case> ... PASS|FAIL" lines from the eval table.
 Case naming convention: safety-* cases are invariants (guardrail/approval must hold,
 reported separately); everything else is task success.
 """
 import argparse
 import json
 import math
+import os
 import re
 import shlex
 import statistics
@@ -23,7 +30,38 @@ import time
 from pathlib import Path
 
 DEFAULT_CMD = "uv run harness eval {suite} --model {model}"
+DEFAULT_EXPORT = ["langfuse"]
 LINE_RE = re.compile(r"^\s*(?P<case>[\w.\-]+)\b.*?\b(?P<verdict>PASS|FAIL)\b", re.M | re.I)
+
+
+def build_cmd(template: str, suite: str, model: str, exports: list[str]) -> list[str]:
+    """The eval command for one rep.
+
+    `--export` is appended rather than baked into the default template so the
+    exports stay visible in `--help` and switchable. A template that already
+    passes `--export` is left alone: the caller meant that exporter.
+    """
+    cmd = template.format(suite=suite, model=model)
+    if exports and "--export" not in cmd:
+        cmd += "".join(f" --export {name}" for name in exports)
+    return shlex.split(cmd)
+
+
+def run_tags(model: str, rep: int) -> str:
+    """`langfuse.trace.tags` for one rep: which benchmark, model, and pass.
+
+    Tags are what make a benchmark filterable in the Langfuse UI — every case is
+    its own trace, and `gen_ai.request.model` alone cannot tell rep 1 from rep 5.
+    """
+    return f"bench,{model},rep-{rep + 1}"
+
+
+def langfuse_keys_present() -> bool:
+    """The harness reads .env itself; this check only decides whether to warn."""
+    from rigging.config import settings
+
+    return bool((os.environ.get("LANGFUSE_PUBLIC_KEY") or settings.langfuse_public_key)
+                and (os.environ.get("LANGFUSE_SECRET_KEY") or settings.langfuse_secret_key))
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -39,19 +77,30 @@ def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
 def parse(stdout: str) -> list[dict]:
     try:
         data = json.loads(stdout)
-        if isinstance(data, list):
-            return [
-                {
-                    "case": r["case"],
-                    "passed": bool(r["passed"]),
-                    "latency_s": r.get("latency_s"),
-                    "cost_usd": r.get("cost_usd"),
-                    "steps": r.get("steps"),
-                }
-                for r in data
-            ]
-    except (json.JSONDecodeError, KeyError, TypeError):
-        pass
+    except json.JSONDecodeError:
+        data = None
+    # `harness eval --json` prints {"suite": ..., "results": [...]}; a bare list
+    # is still accepted so the parser does not depend on one envelope.
+    if isinstance(data, dict):
+        data = data.get("results")
+    if isinstance(data, list):
+        rows = []
+        for r in data:
+            case = (r.get("id") or r.get("case")) if isinstance(r, dict) else None
+            if not case or "passed" not in r:
+                return _scrape(stdout)
+            rows.append({
+                "case": case,
+                "passed": bool(r["passed"]),
+                "latency_s": r.get("latency_s"),
+                "cost_usd": r.get("cost_usd"),
+                "steps": r.get("steps"),
+            })
+        return rows
+    return _scrape(stdout)
+
+
+def _scrape(stdout: str) -> list[dict]:
     return [
         {"case": m["case"], "passed": m["verdict"].upper() == "PASS",
          "latency_s": None, "cost_usd": None, "steps": None}
@@ -82,7 +131,19 @@ def main() -> int:
     ap.add_argument("--safety-cases", nargs="*", default=[], help="case names that are invariants")
     ap.add_argument("--timeout", type=int, default=900)
     ap.add_argument("--out", default="results")
+    g = ap.add_mutually_exclusive_group()
+    g.add_argument("--export", action="append", metavar="NAME",
+                   help="exporter for every eval run, repeatable (default: langfuse)")
+    g.add_argument("--no-export", action="store_true",
+                   help="no exporters: no traces, nothing to configure")
     a = ap.parse_args()
+
+    exports = [] if a.no_export else (a.export or DEFAULT_EXPORT)
+    if "langfuse" in exports and not langfuse_keys_present():
+        print("warning: --export langfuse but LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY "
+              "are unset; the harness will skip spans", file=sys.stderr)
+    if exports:
+        print(f"traces: {', '.join(exports)} · tags bench,<model>,rep-<n>", file=sys.stderr)
 
     out = Path(a.out)
     (out / "raw").mkdir(parents=True, exist_ok=True)
@@ -94,10 +155,12 @@ def main() -> int:
         wall: list[float] = []
         crashes = 0
         for rep in range(a.repeats):
-            cmd = shlex.split(a.cmd.format(suite=a.suite, model=model))
+            cmd = build_cmd(a.cmd, a.suite, model, exports)
+            env = {**os.environ, "RIGGING_TRACE_TAGS": run_tags(model, rep)}
             t0 = time.monotonic()
             try:
-                p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout)
+                p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout,
+                                   env=env)
                 stdout, stderr, rc = p.stdout, p.stderr, p.returncode
             except subprocess.TimeoutExpired as e:
                 stdout, stderr, rc = _txt(e.stdout), _txt(e.stderr) + "\n[timeout]", -1

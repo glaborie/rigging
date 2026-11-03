@@ -327,3 +327,51 @@ def test_exporter_falls_back_to_dotenv_settings(monkeypatch):
     exporter = obs.LangfuseExporter()
     assert exporter.endpoint == "https://cloud.langfuse.com/api/public/otel/v1/traces"
     assert base64.b64decode(exporter._auth).decode() == "pk-from-file:sk-from-file"
+
+
+def test_bench_tags_reach_the_root_span(tmp_path, monkeypatch):
+    """`scripts/bench.py` sets RIGGING_TRACE_TAGS; the trace must carry them, or a
+    benchmark's traces are indistinguishable by model and pass number."""
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_tags", "bench,gemini/gemini-3.7-flash,rep-2")
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    name, attributes = exporter.spans[0]
+    assert name == "invoke_agent"
+    assert attributes["langfuse.trace.tags"] == ["bench", "gemini/gemini-3.7-flash", "rep-2"]
+
+
+def test_no_tag_attribute_when_the_variable_is_unset(tmp_path, monkeypatch):
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_tags", "")
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    assert "langfuse.trace.tags" not in exporter.spans[0][1]
+
+
+def test_tags_are_labels_so_capture_content_off_keeps_them(tmp_path, monkeypatch):
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_tags", "bench")
+    spec = _spec(tmp_path, observability={"exporters": ["console"], "capture_content": False})
+
+    run_agent(spec, "secret prompt", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    attributes = exporter.spans[0][1]
+    assert attributes["langfuse.trace.tags"] == ["bench"]
+    assert "langfuse.observation.input" not in attributes

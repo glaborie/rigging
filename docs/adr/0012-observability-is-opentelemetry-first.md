@@ -30,3 +30,17 @@ attribute names are centralised in one module.
 Langfuse SDK directly: rejected — exactly the coupling that already cost a
 migration. Own JSONL event stream with adapters later: kept as the store, not as
 the tracing interface.
+
+## Postscript (v0.6.3): trace tags are a setting, not a protocol
+
+A benchmark produces one trace per eval case, so "which model, which pass?" has
+to be filterable in the UI. Langfuse maps `langfuse.trace.tags` (string[]) to
+trace tags; `RIGGING_TRACE_TAGS` (comma-separated) is read in `loop._trace_tags()`
+and set on the root span only. `scripts/bench.py` writes `bench,<model>,rep-<n>`
+per rep, so the same code path serves a demo run and a 40-trace benchmark.
+
+Cost: one more environment variable, and an attribute that is invisible until
+you open the trace. It is deliberately not a manifest field — tags describe the
+experiment, not the agent, so a manifest must not hard-code them. Tags are
+labels, not content: `capture_content: false` still sends them. Verified on
+cloud.langfuse.com — trace tags `["bench","gemini/gemini-3.7-flash","rep-1"]`.

@@ -104,6 +104,17 @@ def _content(spec: AgentSpec, *, input_value: Any = None,
     return attrs
 
 
+def _trace_tags() -> dict[str, Any]:
+    """`RIGGING_TRACE_TAGS` → Langfuse trace tags, for filtering a run in the UI.
+
+    Tags are labels, not content: they are not gated by `capture_content`.
+    Langfuse reads `langfuse.trace.tags` (string[]) on any span of the trace;
+    setting it on the root keeps it to one place.
+    """
+    tags = [t.strip() for t in settings.trace_tags.split(",") if t.strip()]
+    return {"langfuse.trace.tags": tags} if tags else {}
+
+
 def _sub_env(value: Any) -> Any:
     """${VAR} in manifest option values reads the environment; unset means empty."""
     import os
@@ -348,6 +359,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.run_id": run_id,
         "rigging.spec_hash": spec.spec_hash,
         **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
+        **_trace_tags(),
         **_content(spec, input_value=user_content, trace=True),
     })
     last: ModelResponse | None = None
