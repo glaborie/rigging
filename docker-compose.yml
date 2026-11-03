@@ -32,17 +32,23 @@ services:
       # that belongs to the dashboard config, and a config that fails to parse
       # makes /v1/chat/completions return 500 instead of silently falling through.
       # Route per request: model "freellm/<id>" or header x-omniroute-provider: freellm.
-      OMNIROUTE_SELF_HOSTED_PROVIDERS: |
-        providers:
-          - id: freellm
-            kind: openai
-            baseUrl: http://host.docker.internal:3001/v1
-            model: codestral
-            apiKey: ${FREELLM_API_KEY}
-          - id: ollama
-            kind: openai
-            baseUrl: http://host.docker.internal:11434/v1
-            model: qwen3:8b
+      #
+      # The static self-hosted pool is disabled. With it enabled the router only
+      # considered freellm/ollama, so a model on a dashboard connection
+      # (openrouter/gemini) fell back to those two and returned 503 "no eligible
+      # providers": freellm has no key (401) and the harness uses local Ollama
+      # directly, not through OmniRoute. Dashboard connections route now.
+      # OMNIROUTE_SELF_HOSTED_PROVIDERS: |
+      #   providers:
+      #     - id: freellm
+      #       kind: openai
+      #       baseUrl: http://host.docker.internal:3001/v1
+      #       model: codestral
+      #       apiKey: ${FREELLM_API_KEY}
+      #     - id: ollama
+      #       kind: openai
+      #       baseUrl: http://host.docker.internal:11434/v1
+      #       model: qwen3:8b
     volumes:
       - omniroute-data:/root/.omniroute
     extra_hosts:
