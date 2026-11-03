@@ -4,7 +4,7 @@ Each milestone is shippable on its own. The go-public gate is deliberately early
 the first point at which a stranger can run it and understand it.
 
 **Current state (2026-11-03):** v0.1–v0.5 are shipped and v0.6 (scale-out) is
-complete. v0.5 delivered the manifest schema, entry-points discovery, the
+released as v0.6.0. v0.5 delivered the manifest schema, entry-points discovery, the
 architecture/ADR pass, the README recording and the read-only web widget; v0.6
 delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
 execution. 139 tests, ruff + `mypy --strict` clean. The four v0.6 proofs are in
@@ -130,10 +130,9 @@ Version bumped to 0.4.0.
 ## v0.6 — scale-out (optional) — DONE (2026-11-02)
 
 All four items shipped: subagents (ADR-0019), MLflow exporter (ADR-0020), service
-auth (ADR-0021), parallel tool execution (ADR-0022). Version stays 0.5.0 until a
-release is cut; v0.6 is the scale-out milestone, not a version bump by itself.
-Run [`showcase-v0.6.md`](showcase-v0.6.md) for the four commands and the evidence
-each one leaves.
+auth (ADR-0021), parallel tool execution (ADR-0022). **Released as v0.6.0
+(2026-11-03).** Run [`showcase-v0.6.md`](showcase-v0.6.md) for the four commands
+and the evidence each one leaves.
 
 - [x] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
       ADR-0019. `subagents:` in the manifest becomes `spawn_<name>(task)`,
