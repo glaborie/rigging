@@ -19,7 +19,7 @@ services:
       dockerfile: Dockerfile.omniroute
     image: rigging/omniroute:3.8.52
     ports:
-      - "20128:20128"
+      - "127.0.0.1:20128:20128"
     environment:
       PORT: "20128"
       OMNIROUTE_SERVER_HOST: 0.0.0.0
