@@ -15,7 +15,7 @@ Current state: v0.6.3 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (169 offline tests plus a browser smoke test; ruff + `mypy --strict`
+tested (174 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
@@ -80,6 +80,7 @@ examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 BENCHMARKING.md                    model-id syntax, profiles, reading the table
 scripts/bench.py                   models x repeats driver -> results/
+scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file
 results/                           published table + raw runs (evidence, not code)
 tests/                             unit, SSE wire fixtures, loop invariants,
                                    and the opt-in browser smoke test

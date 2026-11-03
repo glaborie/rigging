@@ -99,6 +99,21 @@ No API key is required for either path. The gateway is OpenAI-compatible HTTP,
 so pointing `RIGGING_BASE_URL` at OmniRoute, vLLM, LM Studio or Ollama's own
 `/v1` is all it takes to switch providers.
 
+## Trajectories (ATIF)
+
+A Langfuse session becomes an [ATIF v1.7](https://docs.nvidia.com/nemo/relay/latest/configure-plugins/observability/atif.md)
+trajectory file, which external viewers can open:
+
+```bash
+make atif SESSION=s_a602a7c7b060      # -> runs/atif/atif-s_a602a7c7b060.json
+```
+
+Then drop the file into the OpenHands trajectory visualizer at
+<http://localhost:12000>. One trace is one trajectory: the prompt is a `user`
+step, each model call an `agent` step with its promoted tool calls, each batch
+of tool results a `system` observation step. The conversion is a script, not an
+exporter — `scripts/langfuse_to_atif.py --help`.
+
 ## Web view
 
 A read-only page over the same SQLite event log — no second store, no write

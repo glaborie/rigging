@@ -10,7 +10,7 @@ v0.6.3 — see the v0.6 sections). v0.5
 delivered the manifest schema, entry-points discovery, the
 architecture/ADR pass, the README recording and the read-only web widget; v0.6
 delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
-execution. 169 offline tests plus a browser smoke test; ruff + `mypy --strict`
+execution. 174 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean. The four v0.6 proofs are in [`showcase-v0.6.md`](showcase-v0.6.md).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
@@ -229,7 +229,7 @@ into one bucket.
       uvicorn and asserts per-client buckets from a trusted peer and a shared
       bucket from an untrusted one. The threat model documents the derivation
       table and the shared-bucket availability risk; the README and ADR-0021
-      say where the trust list is configured. `make check`: 169 passed; the
+      say where the trust list is configured. `make check`: 174 passed; the
       browser test still renders under the CSP.
 
 ## Standing rules

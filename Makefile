@@ -104,6 +104,10 @@ trace: ## run the observability example, then read its spans back from Langfuse 
 	   $(if $(MODEL),--model $(MODEL),) || exit $$?; \
 	 uv run python scripts/langfuse_tail.py --since-file "$$marker" --wait 90
 
+atif: ## export a Langfuse session as an ATIF trajectory: make atif SESSION=s_abc123
+	@test -n "$(SESSION)" || { printf 'usage: make atif SESSION=s_abc123 [OUT=runs/atif]\n'; exit 2; }
+	uv run python scripts/langfuse_to_atif.py "$(SESSION)" --out $(if $(OUT),$(OUT),runs/atif)
+
 hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples/hello/)
 	RIGGING_BASE_URL=$${RIGGING_BASE_URL:-http://localhost:20128/v1} \
 	uv run harness run $(MANIFEST) "$(PROMPT)" --model $(if $(MODEL),$(MODEL),$(HELLO_MODEL))
