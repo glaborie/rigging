@@ -1,12 +1,13 @@
 # Threat model: the web view and the event log
 
-**Status:** living document, current as of v0.6.3. Decisions are recorded in
+**Status:** living document, current as of v0.7.0. Decisions are recorded in
 [ADR-0018](adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md) (the
-read-only view) and [ADR-0021](adr/0021-service-auth-is-a-bearer-token.md)
-(auth, transport, rate limiting).
+read-only view), [ADR-0021](adr/0021-service-auth-is-a-bearer-token.md) (auth,
+transport, rate limiting) and [ADR-0023](adr/0023-the-web-ui-can-run-an-agent.md)
+(the opt-in chat write path).
 
-**Scope.** `harness serve` (FastAPI + SSE), the SQLite event log it reads, and
-the bearer token that guards it. Out of scope: the model gateway, tool
+**Scope.** `harness serve` (FastAPI + SSE), the SQLite event log it reads, the
+opt-in chat write path (`--manifest`), and the bearer token that guards both. Out of scope: the model gateway, tool
 implementations, the host OS, and any other exporter (Langfuse, MLflow). Those
 have their own data flows and are named in the non-claims below.
 
@@ -35,13 +36,19 @@ pattern-based; it reduces exposure, it is not a guarantee (see §6).
 
 ```
 operator browser ──TLS──▶ reverse proxy ──HTTP/loopback──▶ uvicorn (FastAPI)
-                                                              │  read-only SQLite
-                                                              ▼
-                                                          rigging.db
+        │                                                     │        │
+        │  GET /api/* (read)                                  │        │ POST /api/chat
+        │  POST /api/runs/{id}/approval  ─────────────────────┘        │ (opt-in, --manifest)
+        ▼                                                              ▼
+   rigging.db ◀── read-only SQLite (`mode=ro`)              run_agent in a worker thread
+        ▲                                                              │
+        └────────────────────── every event appended ──────────────────┘
 ```
 
-There is exactly one write path into the database — the agent loop — and the
-service opens it with SQLite `mode=ro`. The browser never sends run data back.
+Reads never write: the service opens the log with SQLite `mode=ro`. The only
+writer is the agent loop; the chat endpoint starts a `run_agent`, it does not
+write run state itself. The browser sends a prompt and an approval verdict, never
+run data, and cannot edit the log.
 
 ---
 
@@ -207,8 +214,9 @@ provide it:
   the volume. No KMS, no field-level encryption.
 - **Redaction is not DLP.** `redact.py` is a set of patterns. It is tested, but
   it cannot certify that a transcript is free of personal data.
-- **No per-user authentication or authorization.** One shared token, one
-  read-only scope. No RBAC, no tenants, no per-run access control.
+- **No per-user authentication or authorization.** One shared token. Reads are
+  all-or-nothing; chat (when enabled) can start a run and approve a tool for
+  anyone holding it. No RBAC, no tenants, no per-run access control.
 - **No audit trail of reads.** The service does not record who viewed which run.
   The proxy's access log is the only record.
 - **No token expiry or revocation.** Rotation is a restart with both values.
@@ -229,8 +237,9 @@ provide it:
 
 In rough order of value for a bank or insurer review:
 
-1. **OIDC / SSO** with a read-only scope, so access is per-person and revocable
-   (the deferred half of ADR-0021).
+1. **OIDC / SSO** with a read-only scope by default and a separate write scope
+   for chat, so access is per-person and revocable (the deferred half of
+   ADR-0021).
 2. **Per-user audit** of views and exports, forwarded to the SIEM.
 3. **Encryption at rest** with a managed key, and a documented key-rotation
    procedure.
@@ -241,17 +250,18 @@ In rough order of value for a bank or insurer review:
 6. **High availability**: replicated storage and more than one process; today's
    SQLite file is a single point of failure.
 
-Until then, the honest summary is: a single-operator, read-only development
-window that can be exposed safely behind a TLS proxy with one rotatable token,
-and that must be treated as holding confidential data.
+Until then, the honest summary is: a single-operator development window that is
+read-only by default and can run the agent only when started with `--manifest`,
+exposable behind a TLS proxy with one rotatable token, and to be treated as
+holding confidential data either way.
 
 ---
 
 ## 8. Verification commands
 
 ```bash
-make check                       # 188 offline tests: auth, headers, limiter, redaction
-make test-browser                # the page renders under the CSP in Chromium
+make check                       # 204 offline tests: auth, headers, limiter, redaction, chat
+make test-browser                # the page renders under the CSP, and a turn is approved
 uv run pytest tests/test_service_proxy.py   # XFF trusted vs untrusted peer
 
 RIGGING_SERVICE_TOKEN=demo uv run harness serve &
@@ -262,4 +272,15 @@ for i in $(seq 1 300); do curl -s -o /dev/null -w '%{http_code}\n' \
      -H 'Authorization: Bearer demo' http://127.0.0.1:8000/api/runs; done | sort | uniq -c
                                                            # 200s, then 429s
 RIGGING_SERVICE_TOKEN=demo uv run harness serve --host 0.0.0.0   # exits 2
+
+# chat: no token is a refusal, and the write route does not exist without it
+uv run harness serve --manifest examples/b2b-support/agent.yaml   # exits 2
+RIGGING_SERVICE_TOKEN=demo uv run harness serve \
+  --manifest examples/b2b-support/agent.yaml &
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Content-Type: application/json' -d '{"prompt":"hi"}' \
+  http://127.0.0.1:8000/api/chat                            # 401
+curl -s -o /dev/null -w '%{http_code}\n' -X POST \
+  -H 'Authorization: Bearer demo' -H 'Content-Type: application/json' \
+  -d '{"prompt":"hi"}' http://127.0.0.1:8000/api/chat       # 202
 ```

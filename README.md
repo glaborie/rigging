@@ -327,16 +327,18 @@ for the registration pattern. Entry-points are discovered automatically when
 ## Non-goals
 
 Deliberately not built (see [ADR-0017](docs/adr/0017-deliberate-non-goals.md)):
-agent long-term memory, serving MCP, LLM-as-judge guardrails or evals, a
-*write-capable* web UI, model fine-tuning, Windows-native support, and a plugin
-marketplace beyond entry points.
+agent long-term memory, serving MCP, LLM-as-judge guardrails or evals, model
+fine-tuning, Windows-native support, and a plugin marketplace beyond entry
+points.
 
-Four items were on that list and have since shipped, each with its own ADR:
+Five items were on that list and have since shipped, each with its own ADR:
 the read-only web view (v0.5, [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)),
 subagents (v0.6, [ADR-0019](docs/adr/0019-subagents-are-child-runs.md)),
 service auth (v0.6, [ADR-0021](docs/adr/0021-service-auth-is-a-bearer-token.md)),
-and opt-in parallel tool execution (v0.6, [ADR-0022](docs/adr/0022-parallel-tool-execution-is-opt-in.md)).
-ADR-0017 records the supersessions; it is not silently edited away.
+opt-in parallel tool execution (v0.6, [ADR-0022](docs/adr/0022-parallel-tool-execution-is-opt-in.md)),
+and the *write-capable* web UI (v0.7, [ADR-0023](docs/adr/0023-the-web-ui-can-run-an-agent.md)) —
+opt-in behind `--manifest`, and still run by the loop. ADR-0017 records the
+supersessions; it is not silently edited away.
 
 ## License
 

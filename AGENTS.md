@@ -96,7 +96,7 @@ tests/                             unit, SSE wire fixtures, loop invariants,
 uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
-make test-browser            # opt-in: render the web view in headless Chromium
+make test-browser            # opt-in: render the web view and run one turn in Chromium
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)
 ```

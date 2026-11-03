@@ -80,7 +80,9 @@ What it proves: every `/api/*` route is guarded by `hmac.compare_digest` against
 one or more comma-separated tokens (rotation works); `GET /` stays public because
 it carries no run data; the stream uses `fetch` + `ReadableStream` so the token
 travels in a header and never in a URL. The read-only guarantee is unchanged:
-SQLite `mode=ro`, no launch or approve endpoint.
+SQLite `mode=ro`, no launch or approve endpoint. (v0.7 later added an opt-in
+write path behind `--manifest` and a token — [showcase-v0.7.md](showcase-v0.7.md);
+without the flag this paragraph still holds.)
 
 In the browser, open <http://127.0.0.1:8000>, paste `demo-token`, and watch a
 run replay then follow live.
