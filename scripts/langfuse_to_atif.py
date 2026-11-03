@@ -31,11 +31,14 @@ from __future__ import annotations
 
 import argparse
 import base64
+import hashlib
 import json
 import re
 import sys
 import time
 import urllib.parse
+import uuid
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -316,11 +319,72 @@ def _safe(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", name)
 
 
+def write_harbor_layout(trials: list[tuple[str, dict[str, Any]]], out: Path,
+                        *, job: str = "rigging") -> Path:
+    """Lay the trajectories out as a Harbor job, which is what `harbor view` reads.
+
+    Harbor's viewer does not take a bare ATIF file: it lists jobs from
+    `<jobs>/<job>/result.json` and trials from `<job>/<trial>/result.json`, then
+    fetches `<job>/<trial>/agent/trajectory.json`. The shape below is verified
+    against harbor 0.25.0 (its pydantic models fill every field not listed).
+    """
+    job_dir = out / job
+    job_dir.mkdir(parents=True, exist_ok=True)
+    (job_dir / "config.json").write_text("{}\n")
+
+    results: dict[str, dict[str, Any]] = {}
+    for existing in job_dir.glob("*/result.json"):
+        try:
+            row = json.loads(existing.read_text())
+            results[row["trial_name"]] = row
+        except (json.JSONDecodeError, KeyError):
+            continue  # a half-written trial must not break the job listing
+
+    now = datetime.now(UTC).isoformat()
+    for trial_name, doc in trials:
+        trial_dir = job_dir / trial_name
+        (trial_dir / "agent").mkdir(parents=True, exist_ok=True)
+        trajectory = trial_dir / "agent" / "trajectory.json"
+        trajectory.write_text(json.dumps(doc, indent=2, default=str) + "\n")
+        task_path = str(trial_dir.resolve())
+        (trial_dir / "config.json").write_text(
+            json.dumps({"task": {"path": task_path}}, indent=2) + "\n")
+        results[trial_name] = {
+            "id": str(uuid.uuid4()),
+            "task_name": doc.get("agent", {}).get("name") or "rigging",
+            "trial_name": trial_name,
+            "trial_uri": trial_dir.resolve().as_uri(),
+            "task_id": {"path": task_path},
+            "source": None,
+            "task_checksum": hashlib.sha256(trajectory.read_bytes()).hexdigest(),
+            "config": {"task": {"path": task_path}},
+            "agent_info": {"name": "rigging",
+                           "version": doc.get("agent", {}).get("version"),
+                           "model_info": None},
+            "started_at": now,
+            "finished_at": now,
+        }
+        (trial_dir / "result.json").write_text(
+            json.dumps(results[trial_name], indent=2) + "\n")
+
+    (job_dir / "result.json").write_text(json.dumps({
+        "id": str(uuid.uuid4()),
+        "started_at": now,
+        "finished_at": now,
+        "n_total_trials": len(results),
+        "stats": {"n_completed_trials": len(results)},
+        "trial_results": list(results.values()),
+    }, indent=2) + "\n")
+    return job_dir
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="Langfuse session -> ATIF v1.7 trajectory")
     ap.add_argument("target", help="session id, session URL, or trace id")
     ap.add_argument("--out", default="runs/atif", help="output directory (default: runs/atif)")
     ap.add_argument("--stdout", action="store_true", help="print the trajectory instead of writing")
+    ap.add_argument("--harbor", metavar="DIR",
+                    help="also write a Harbor job layout under DIR, for `harbor view DIR`")
     a = ap.parse_args()
 
     kind, ident = parse_target(a.target)
@@ -332,6 +396,7 @@ def main() -> int:
         traces = session_traces(client, ident) if kind == "session" else [{"id": ident}]
 
         written: list[Path] = []
+        trials: list[tuple[str, dict[str, Any]]] = []
         for trace in traces:
             trace_id = trace["id"]
             observations = trace_observations(client, trace_id)
@@ -341,15 +406,24 @@ def main() -> int:
                 print(json.dumps(doc, indent=2, default=str))
                 continue
             suffix = "" if len(traces) == 1 else f"-{trace_id[:8]}"
-            path = out / f"atif-{_safe(doc['session_id'])}{suffix}.json"
+            name = f"atif-{_safe(doc['session_id'])}{suffix}"
+            path = out / f"{name}.json"
             path.write_text(json.dumps(doc, indent=2, default=str) + "\n")
             written.append(path)
+            trials.append((name.removeprefix("atif-"), doc))
             print(f"{path}  {len(doc['steps'])} steps  "
                   f"{doc['agent']['name']} / {doc['agent']['model_name']}", file=sys.stderr)
 
     if written:
         print("upload: open http://localhost:12000 and drop the file in, "
               "or add ?fileUrl=<same-origin-url>", file=sys.stderr)
+    if a.harbor and trials:
+        job_dir = write_harbor_layout(trials, Path(a.harbor))
+        trial_name = trials[0][0]
+        print(f"harbor: {job_dir}\n"
+              f"  harbor view {job_dir.parent} --port 8080\n"
+              f"  http://127.0.0.1:8080/jobs/{job_dir.name}/trials/{trial_name}",
+              file=sys.stderr)
     return 0
 
 

@@ -115,3 +115,35 @@ def test_targets_parse_from_ids_and_session_urls() -> None:
     assert bench.parse_target(
         "https://cloud.langfuse.com/project/p/traces/aba62abe"
     ) == ("trace", "aba62abe")
+
+
+def test_harbor_layout_matches_what_harbor_view_reads(tmp_path) -> None:
+    """`harbor view` lists trials from result.json and reads agent/trajectory.json."""
+    import hashlib
+
+    mod = _mod()
+    doc = mod.build_trajectory("s_test", {"id": "tr_1"}, _observations())
+    job = mod.write_harbor_layout([("s_test", doc)], tmp_path / "harbor")
+
+    trajectory = job / "s_test" / "agent" / "trajectory.json"
+    assert json.loads(trajectory.read_text())["schema_version"] == "ATIF-v1.7"
+    result = json.loads((job / "s_test" / "result.json").read_text())
+    assert result["trial_name"] == "s_test"
+    assert result["agent_info"]["name"] == "rigging"
+    assert result["task_checksum"] == hashlib.sha256(trajectory.read_bytes()).hexdigest()
+
+    job_result = json.loads((job / "result.json").read_text())
+    assert job_result["n_total_trials"] == 1
+    assert job_result["stats"]["n_completed_trials"] == 1
+
+
+def test_a_second_session_joins_the_same_job_without_losing_the_first(tmp_path) -> None:
+    mod = _mod()
+    job = mod.write_harbor_layout([("s_one", mod.build_trajectory("s_one", {"id": "a"}, _observations()))],
+                                  tmp_path / "harbor")
+    job = mod.write_harbor_layout([("s_two", mod.build_trajectory("s_two", {"id": "b"}, _observations()))],
+                                  job.parent)
+    job_result = json.loads((job / "result.json").read_text())
+    assert job_result["n_total_trials"] == 2
+    assert sorted(r["trial_name"] for r in job_result["trial_results"]) == ["s_one", "s_two"]
+    assert (job / "s_one" / "agent" / "trajectory.json").exists()

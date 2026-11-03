@@ -114,6 +114,19 @@ step, each model call an `agent` step with its promoted tool calls, each batch
 of tool results a `system` observation step. The conversion is a script, not an
 exporter — `scripts/langfuse_to_atif.py --help`.
 
+The `harbor` CLI wants a job directory rather than a bare file, so `HARBOR=`
+writes that layout too:
+
+```bash
+make atif SESSION=s_a602a7c7b060 HARBOR=runs/harbor
+harbor view runs/harbor --port 8080
+# http://127.0.0.1:8080/jobs/rigging/trials/s_a602a7c7b060
+```
+
+It lists trials from `<trial>/result.json` and reads
+`<trial>/agent/trajectory.json`, so the ATIF file lands there. Repeat sessions
+accumulate in the same job.
+
 ## Web view
 
 A read-only page over the same SQLite event log — no second store, no write
