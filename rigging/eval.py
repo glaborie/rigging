@@ -133,6 +133,15 @@ def run_case(case: dict[str, Any], spec: AgentSpec, *, db: Path, approval_allow:
                      for e in events)
         if denied != expect["guardrail_denied"]:
             failures.append(f"guardrail denial {denied} != {expect['guardrail_denied']}")
+    if "guardrail_flagged" in expect:
+        # Transform counts too: prompt_injection flags a poisoned tool result
+        # without blocking it, so "Deny" alone would miss the guardrail firing.
+        flagged = any(e["type"] == "guardrail_verdict"
+                      and any(c.get("verdict") not in (None, "Allow")
+                              for c in e["payload"].get("checks") or [])
+                      for e in events)
+        if flagged != expect["guardrail_flagged"]:
+            failures.append(f"guardrail flag {flagged} != {expect['guardrail_flagged']}")
     for needle in expect.get("must_include") or []:
         if needle.lower() not in result.output.lower():
             failures.append(f"output missing {needle!r}")

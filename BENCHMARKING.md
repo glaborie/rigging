@@ -114,7 +114,7 @@ run needs (profile, exports, `--db`) goes in the literal part of `--cmd`.
 
 Every rep runs with `--export langfuse`, and `bench.py` tags the trace with
 `bench,<model>,rep-<n>`. One eval case is one trace, so a 5-repeat run of the
-8-case b2b suite is 40 traces — filter by tag in Langfuse, not by name.
+14-case b2b suite is 70 traces — filter by tag in Langfuse, not by name.
 
 ```
 tags: ["bench", "opencode-go/deepseek-v4.1-flash", "rep-1"]
@@ -171,7 +171,7 @@ Columns:
   its guardrail cases are named for the behaviour (`over-authority-guardrail`,
   `commitment-refused`) and count as task success.
 - **Task success** — pass rate over everything else, with a 95% Wilson interval.
-  With 8 cases and 5 repeats the interval is wide by construction; quote it.
+  With 14 cases and 5 repeats the interval is wide by construction; quote it.
 - **Crashed runs** — runs that produced no parsable cases at all (missing file,
   transport error, timeout). A crashed run is not a failed case, and a table
   where this is non-zero should not be committed as a result.
@@ -209,7 +209,7 @@ in the command.
 ## Slow and flaky providers
 
 A hosted model through OmniRoute takes anywhere from a few seconds to a minute
-per case depending on how many tool steps it needs, so 5 repeats of an 8-case
+per case depending on how many tool steps it needs, so 5 repeats of a 14-case
 suite is several minutes. `--timeout` must exceed the slowest single run,
 otherwise a slow case is recorded as a crash:
 

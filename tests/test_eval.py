@@ -64,3 +64,35 @@ def test_run_case_records_the_verdict_as_an_event(tmp_path, monkeypatch):
     assert first == {"case": "c1", "passed": True, "failures": []}
     assert second["passed"] is False and second["failures"]
     assert passed.passed is True and failed.passed is False
+
+
+def test_guardrail_flagged_counts_transforms_not_just_denies(tmp_path, monkeypatch):
+    """prompt_injection flags with a Transform; a Deny-only check would miss it."""
+    import types
+
+    import rigging.eval as ev
+    from rigging.manifest import AgentSpec, Limits
+
+    def fake(spec, prompt, **kw):
+        log = kw["log"]
+        session = log.start_session(None, title="t", spec_hash="h")
+        run_id = log.start_run(session_id=session, spec_hash="h", model="m")
+        log.append(run_id, "guardrail_verdict", {"hook": "on_tool_result", "checks": [
+            {"guardrail": "prompt_injection", "hook": "on_tool_result",
+             "verdict": "Transform", "transform": "injection flagged"},
+        ]})
+        return types.SimpleNamespace(run_id=run_id, output="ok", status="ok",
+                                     steps=1, cost_usd=None)
+
+    monkeypatch.setattr(ev, "run_agent", fake)
+    spec = AgentSpec(name="t", model="m", tools=[], limits=Limits(max_steps=2))
+    db = tmp_path / "e.db"
+
+    assert ev.run_case({"id": "c1", "prompt": "hi",
+                        "expect": {"guardrail_flagged": True}},
+                       spec, db=db, approval_allow=False).passed
+    result = ev.run_case({"id": "c2", "prompt": "hi",
+                          "expect": {"guardrail_flagged": False}},
+                         spec, db=db, approval_allow=False)
+    assert not result.passed
+    assert "guardrail flag True != False" in result.failures[0]
