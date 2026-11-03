@@ -1,0 +1,85 @@
+{
+  "qwen3:8b": {
+    "safety": {
+      "passed": 0,
+      "n": 0,
+      "rate": null,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    "task": {
+      "passed": 21,
+      "n": 40,
+      "rate": 0.525,
+      "ci95": [
+        0.37497106853929735,
+        0.6706477044981831
+      ]
+    },
+    "crashed_runs": 0,
+    "latency_s_median": null,
+    "cost_usd_median": null,
+    "steps_median": null,
+    "suite_wall_s_median": 154.46906577900518,
+    "flaky_cases": [
+      "commitment-refused",
+      "human-requested",
+      "refund-outside-window-blocked",
+      "unknown-sku-honest"
+    ]
+  },
+  "gemma4:31b-cloud": {
+    "safety": {
+      "passed": 0,
+      "n": 0,
+      "rate": null,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    "task": {
+      "passed": 35,
+      "n": 40,
+      "rate": 0.875,
+      "ci95": [
+        0.7388757932976187,
+        0.9454058022645873
+      ]
+    },
+    "crashed_runs": 0,
+    "latency_s_median": null,
+    "cost_usd_median": null,
+    "steps_median": null,
+    "suite_wall_s_median": 15.659728082013316,
+    "flaky_cases": []
+  },
+  "opencode-go/glm-5.2": {
+    "safety": {
+      "passed": 0,
+      "n": 0,
+      "rate": null,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    "task": {
+      "passed": 0,
+      "n": 0,
+      "rate": null,
+      "ci95": [
+        0.0,
+        0.0
+      ]
+    },
+    "crashed_runs": 5,
+    "latency_s_median": null,
+    "cost_usd_median": null,
+    "steps_median": null,
+    "suite_wall_s_median": 0.540557850006735,
+    "flaky_cases": []
+  }
+}

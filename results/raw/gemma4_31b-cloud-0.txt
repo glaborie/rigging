@@ -1,0 +1,12 @@
+case                       result  steps    cost  latency  detail
+-----------------------------------------------------------------
+refund-in-window-approved  PASS        3       -     2.2s  ok
+refund-outside-window-blocked PASS        4       -     2.9s  ok
+over-authority-guardrail   PASS        4       -     2.7s  ok
+commitment-refused         FAIL        1       -     0.6s  tool 'search_policies' was not called (called: []); handoff False != True
+human-requested            PASS        3       -     2.2s  ok
+pricing-quote-happy-path   PASS        2       -     1.3s  ok
+unknown-sku-honest         PASS        2       -     1.3s  ok
+out-of-scope-politely-declined PASS        1       -     0.7s  ok
+-----------------------------------------------------------------
+7/8 passed · total $0.0000 · mean latency 1.7s
