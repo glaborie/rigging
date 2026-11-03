@@ -64,7 +64,7 @@ browser-install: ## install the Chromium that `make test-browser` drives
 	uv sync --extra dev --extra service --extra mcp --extra browser
 	uv run playwright install chromium
 
-test-browser: ## opt-in: load the web view in headless Chromium and assert it renders
+test-browser: ## opt-in: render the web view and run one turn in headless Chromium
 	uv run pytest -m browser
 
 lint: ## ruff
@@ -124,8 +124,14 @@ record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
 serve: ## read-only web view of the event log: http://127.0.0.1:8000
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),)
 
+web: ## chat in the browser (needs RIGGING_SERVICE_TOKEN): make web MODEL=... PROFILE=...
+	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
+	  --manifest $(or $(MANIFEST),examples/b2b-support/agent.yaml) \
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),)
+
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
-	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),)
+	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),) \
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),)
 
 seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
 	uv run python examples/b2b-support/seed.py

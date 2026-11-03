@@ -1,8 +1,10 @@
-"""Read-only FastAPI + SSE view of the event log (ADR-0018).
+"""Web view of the event log: read-only by default, chat when a manifest is given.
 
-Everything here is a query over `sessions`, `runs` and `run_events`. There is no
-write endpoint and no second store, so the page can never disagree with the CLI.
-Needs `rigging[service]`; `harness serve` prints the install hint without it.
+Everything the page shows is a query over `sessions`, `runs` and `run_events`.
+Without `--manifest` there is no write endpoint at all (ADR-0018). With it, the
+page can start a run and answer an approval, and the loop still runs the agent
+(ADR-0023). Needs `rigging[service]`; `harness serve` prints the install hint
+without it.
 """
 
 from __future__ import annotations
@@ -21,7 +23,9 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from pydantic import BaseModel, Field
 
+from rigging.service.chat import ChatRunner
 from rigging.service.ratelimit import RateLimiter
 
 #: How often the SSE generator re-reads the log while a run is in flight.
@@ -51,6 +55,16 @@ def runs(db: str | Path, limit: int = 20) -> list[dict[str, Any]]:
             " ORDER BY r.started_at DESC LIMIT ?",
             (limit,),
         )
+
+
+def _session_running(db: str | Path, session_id: str) -> bool:
+    """True while a turn of this session is still in flight (ADR-0023)."""
+    with closing(_connect(db)) as conn:
+        row = conn.execute(
+            "SELECT 1 FROM runs WHERE session_id=? AND status='running' LIMIT 1",
+            (session_id,),
+        ).fetchone()
+    return row is not None
 
 
 def run(db: str | Path, run_id: str) -> dict[str, Any] | None:
@@ -240,6 +254,20 @@ def _csp(nonce: str) -> str:
     )
 
 
+class ChatRequest(BaseModel):
+    """One turn from the page. `session_id` continues an existing conversation."""
+
+    prompt: str = Field(min_length=1, max_length=8000)
+    session_id: str | None = None
+
+
+class ApprovalRequest(BaseModel):
+    """The page's answer to a consequential tool."""
+
+    approve: bool
+    note: str = Field(default="", max_length=500)
+
+
 def create_app(
     db: str | Path,
     *,
@@ -247,6 +275,7 @@ def create_app(
     max_seconds: float = 600.0,
     tokens: Sequence[str] | str | None = None,
     rate_limit_per_minute: int = 240,
+    runner: ChatRunner | None = None,
 ) -> FastAPI:
     """Build the app around one SQLite event log.
 
@@ -254,12 +283,22 @@ def create_app(
     can ask for the token (ADR-0021). Empty tokens means no auth — only valid for
     a loopback bind, which `harness serve` enforces. `rate_limit_per_minute`
     caps requests per client IP per minute; `0` disables it.
+
+    `runner` turns on the chat write path (ADR-0023). It is refused without a
+    token: a page on any origin can POST to a loopback port, and the token is the
+    one thing that page cannot read.
     """
     if not Path(db).exists():
         raise FileNotFoundError(f"no event log at {db} — run an agent first")
     if isinstance(tokens, str):
         tokens = [t.strip() for t in tokens.split(",") if t.strip()]
     token_tuple = tuple(tokens or ())
+    if runner is not None and not token_tuple:
+        raise ValueError(
+            "refusing to enable the chat write path without RIGGING_SERVICE_TOKEN: "
+            "any page the browser visits can POST to a loopback port. Set a token "
+            "or start `harness serve` without --manifest (read-only)."
+        )
     limiter = RateLimiter(rate_limit_per_minute)
     guard = [Depends(_rate_limit_dependency(limiter)), Depends(_auth_dependency(token_tuple))]
 
@@ -286,12 +325,58 @@ def create_app(
     def list_runs(limit: int = 20) -> dict[str, Any]:
         return {"runs": runs(db, max(1, min(limit, 100)))}
 
+    @app.get("/api/config", dependencies=guard)
+    def config() -> dict[str, Any]:
+        """What the page may do: chat needs a manifest and a token (ADR-0023)."""
+        return {
+            "chat": runner is not None,
+            "manifest": runner.spec.name if runner is not None else None,
+            "model": runner.spec.model if runner is not None else None,
+            "approvals": runner.approvals if runner is not None else None,
+        }
+
+    if runner is not None:
+
+        @app.post("/api/chat", dependencies=guard, status_code=202)
+        def chat_turn(body: ChatRequest) -> dict[str, Any]:
+            if body.session_id and _session_running(db, body.session_id):
+                raise HTTPException(
+                    status_code=409,
+                    detail="a turn is still running for this session — wait for it",
+                )
+            session_id, run_id = runner.start(body.prompt, body.session_id)
+            return {"session_id": session_id, "run_id": run_id}
+
+        @app.post("/api/runs/{run_id}/approval", dependencies=guard)
+        def answer_approval(run_id: str, body: ApprovalRequest) -> dict[str, Any]:
+            if not runner.resolve(run_id, body.approve, body.note):
+                raise HTTPException(
+                    status_code=409, detail="no approval is waiting for this run"
+                )
+            return {"run_id": run_id, "approved": body.approve}
+
     @app.get("/api/runs/{run_id}", dependencies=guard)
     def get_run(run_id: str) -> dict[str, Any]:
         row = run(db, run_id)
         if row is None:
             raise HTTPException(status_code=404, detail="no such run")
         return {"run": row, "events": events(db, run_id)}
+
+    @app.get("/api/sessions/{session_id}", dependencies=guard)
+    def get_session(session_id: str) -> dict[str, Any]:
+        """Every turn of a session, oldest first — the conversation, not one run."""
+        with closing(_connect(db)) as conn:
+            rows = _rows(
+                conn,
+                "SELECT r.*, s.title FROM runs r LEFT JOIN sessions s USING(session_id)"
+                " WHERE r.session_id=? AND r.parent_run_id IS NULL"
+                " ORDER BY r.started_at, r.run_id",
+                (session_id,),
+            )
+        if not rows:
+            raise HTTPException(status_code=404, detail="no such session")
+        return {"session_id": session_id,
+                "turns": [{"run": row, "events": events(db, row["run_id"])} for row in rows]}
 
     @app.get("/api/runs/{run_id}/stream", dependencies=guard)
     def stream(
@@ -322,6 +407,7 @@ INDEX_HTML = r"""<!doctype html>
   :root {
     --bg: #101418; --panel: #171c22; --line: #232b34; --ink: #d7dee7;
     --dim: #7b8794; --accent: #7dd3a7; --warn: #f0b46b; --bad: #ef7f7f;
+    --user: #1d2833; --call: #16202a;
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--ink);
@@ -331,53 +417,123 @@ INDEX_HTML = r"""<!doctype html>
   header b { letter-spacing: .04em; }
   header span { color: var(--dim); font-size: 12px; }
   main { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 53px); }
-  #runs { border-right: 1px solid var(--line); overflow: auto; padding: 8px; }
+  aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #new { margin: 8px; padding: 7px 10px; background: var(--panel); color: var(--ink);
+         border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font: inherit; }
+  #new:hover { border-color: var(--dim); }
+  #runs { overflow: auto; padding: 0 8px 8px; flex: 1; }
   .run { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
   .run:hover { background: var(--panel); }
   .run[aria-current="true"] { background: var(--panel); outline: 1px solid var(--line); }
   .run small { color: var(--dim); display: block; font-variant-numeric: tabular-nums; }
   .pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); }
   .ok { color: var(--accent); } .running { color: var(--warn); } .bad { color: var(--bad); }
-  section { display: flex; flex-direction: column; min-width: 0; }
+  section { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
   #meta { padding: 10px 16px; border-bottom: 1px solid var(--line); color: var(--dim);
-          font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; }
-  #log { flex: 1; overflow: auto; padding: 12px 16px; font: 12px/1.6 ui-monospace, monospace; }
-  .ev { display: grid; grid-template-columns: 130px 170px 1fr; gap: 10px;
-        border-bottom: 1px solid #1b2229; padding: 3px 0; }
-  .ev time { color: #5c6773; }
-  .ev .type { color: #8ab4f8; }
-  .ev .body { white-space: pre-wrap; word-break: break-word; color: var(--ink); }
-  .empty { color: var(--dim); padding: 24px 16px; }
+          font-size: 12px; display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+  #meta label { display: flex; gap: 5px; align-items: center; cursor: pointer; }
+  #view { flex: 1; overflow: auto; padding: 16px; }
+  #composer { display: flex; gap: 8px; padding: 10px 16px; border-top: 1px solid var(--line); }
+  #composer[hidden] { display: none; }
+  #prompt { flex: 1; resize: none; padding: 9px 11px; border-radius: 8px; font: inherit;
+            background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+  #prompt:focus { outline: 1px solid var(--dim); }
+  #send { padding: 0 16px; border-radius: 8px; border: 1px solid var(--line);
+          background: var(--accent); color: #0c1410; font-weight: 600; cursor: pointer; }
+  #send:disabled { background: var(--panel); color: var(--dim); cursor: default; }
+  .empty { color: var(--dim); padding: 24px 4px; }
+  .msg { max-width: 78ch; margin: 0 0 12px; padding: 9px 13px; border-radius: 10px;
+         white-space: pre-wrap; word-break: break-word; }
+  .user { background: var(--user); border: 1px solid var(--line); margin-left: auto; }
+  .agent { background: transparent; border: 1px solid var(--line); }
+  .card { max-width: 88ch; margin: 0 0 10px; border: 1px solid var(--line);
+          border-radius: 8px; background: var(--call); overflow: hidden; }
+  .card > .head { display: flex; gap: 8px; align-items: baseline; padding: 7px 11px;
+                  border-bottom: 1px solid var(--line); font: 12px ui-monospace, monospace; }
+  .card > .head .name { color: #8ab4f8; }
+  .card > .body { padding: 8px 11px; font: 12px/1.55 ui-monospace, monospace;
+                  white-space: pre-wrap; word-break: break-word; color: var(--dim); }
+  .card > .body.out { color: var(--ink); border-top: 1px dashed var(--line); }
+  .card.denied { border-color: #5a2b2b; }
+  .card.denied .name { color: var(--bad); }
+  .note { font-size: 12px; color: var(--dim); margin: -4px 0 10px; padding-left: 2px;
+          font: 12px ui-monospace, monospace; }
+  .note .hook { color: #8ab4f8; }
+  .approve { display: flex; gap: 8px; padding: 9px 11px; border-top: 1px solid var(--line); }
+  .approve button { padding: 5px 14px; border-radius: 6px; border: 1px solid var(--line);
+                    background: var(--panel); color: var(--ink); font: inherit; cursor: pointer; }
+  .approve button.yes { border-color: var(--accent); color: var(--accent); }
+  .approve button.no { border-color: var(--bad); color: var(--bad); }
+  .approve button:disabled { color: var(--dim); border-color: var(--line); cursor: default; }
+  .foot { margin: 14px 0 4px; padding-top: 10px; border-top: 1px solid var(--line);
+          font-size: 12px; color: var(--dim); display: flex; gap: 14px; flex-wrap: wrap; }
+  .raw { display: grid; grid-template-columns: 90px 170px 1fr; gap: 10px;
+         border-bottom: 1px solid #1b2229; padding: 3px 0; font: 12px/1.6 ui-monospace, monospace; }
+  .raw time { color: #5c6773; }
+  .raw .type { color: #8ab4f8; }
+  .raw .body { white-space: pre-wrap; word-break: break-word; }
 </style>
-<header><b>rigging</b><span>read-only view of the event log · ADR-0018</span></header>
+<header>
+  <b>rigging</b>
+  <span id="mode">read-only view of the event log</span>
+  <span id="whoami"></span>
+</header>
 <main>
-  <div id="runs"><p class="empty">loading runs…</p></div>
+  <aside>
+    <button id="new" type="button">+ new session</button>
+    <div id="runs"><p class="empty">loading runs…</p></div>
+  </aside>
   <section>
     <div id="meta"><span>pick a run</span></div>
-    <div id="log"><p class="empty">No run selected.</p></div>
+    <div id="view"><p class="empty">No run selected.</p></div>
+    <form id="composer" hidden>
+      <textarea id="prompt" rows="1"
+        placeholder="Ask the agent — e.g. refund ORD-1002, 10 units, 112.50 USD"></textarea>
+      <button id="send" type="submit">send</button>
+    </form>
   </section>
 </main>
 <script nonce="__CSP_NONCE__">
 const runsEl = document.getElementById('runs');
-const logEl = document.getElementById('log');
+const viewEl = document.getElementById('view');
 const metaEl = document.getElementById('meta');
+const modeEl = document.getElementById('mode');
+const whoEl = document.getElementById('whoami');
+const composer = document.getElementById('composer');
+const promptEl = document.getElementById('prompt');
+const sendEl = document.getElementById('send');
+
 let token = sessionStorage.getItem('rigging.token') || '';
-let streamController = null, current = null;
+let streamController = null;
+let config = { chat: false, manifest: null, model: null };
+let currentRun = null, currentSession = null, currentStatus = null;
+let events = [], showRaw = false, busy = false;
 
 const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
 
 // The shell is public, the data is not (ADR-0021). On the first 401, ask for the
 // token and keep it in sessionStorage — never in the URL, never in a log.
-async function api(path) {
-  let res = await fetch(path, { headers: authHeaders() });
+async function api(path, opts) {
+  const options = Object.assign({}, opts || {});
+  options.headers = Object.assign({}, options.headers || {}, authHeaders());
+  let res = await fetch(path, options);
   if (res.status === 401) {
     const entered = prompt('Bearer token for this rigging service (RIGGING_SERVICE_TOKEN):');
     if (!entered) throw new Error('unauthorized');
     token = entered.trim();
     sessionStorage.setItem('rigging.token', token);
-    res = await fetch(path, { headers: authHeaders() });
+    options.headers = Object.assign({}, options.headers || {}, authHeaders());
+    res = await fetch(path, options);
   }
   return res;
+}
+
+async function postJson(path, body) {
+  return api(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 const esc = (s) => String(s ?? '').replace(/[&<>"']/g,
@@ -387,6 +543,33 @@ const clock = (ts) => new Date(ts * 1000).toLocaleTimeString();
 function pill(status) {
   const cls = status === 'ok' ? 'ok' : status === 'running' ? 'running' : 'bad';
   return `<span class="pill ${cls}">${esc(status)}</span>`;
+}
+
+function el(tag, cls, text) {
+  const node = document.createElement(tag);
+  if (cls) node.className = cls;
+  if (text !== undefined) node.textContent = text;
+  return node;
+}
+
+function setBusy(value) {
+  busy = value;
+  sendEl.disabled = value;
+  sendEl.textContent = value ? 'running…' : 'send';
+}
+
+async function loadConfig() {
+  try {
+    const res = await api('/api/config');
+    if (res.ok) config = await res.json();
+  } catch { /* read-only view still works */ }
+  modeEl.textContent = config.chat
+    ? 'runs and chat · ADR-0023'
+    : 'read-only view of the event log';
+  if (config.chat) {
+    composer.hidden = false;
+    whoEl.textContent = `${config.manifest} · ${config.model}`;
+  }
 }
 
 async function loadRuns() {
@@ -402,55 +585,280 @@ async function loadRuns() {
   }
   const { runs } = await res.json();
   if (!runs.length) {
-    runsEl.innerHTML = '<p class="empty">no runs yet — run <code>make hello</code></p>';
+    runsEl.innerHTML = config.chat
+      ? '<p class="empty">no runs yet — ask the agent below</p>'
+      : '<p class="empty">no runs yet — run <code>make hello</code></p>';
     return;
   }
   runsEl.replaceChildren(...runs.map((r) => {
-    const el = document.createElement('div');
-    el.className = 'run';
+    const node = el('div', 'run');
     const parent = r.parent_run_id ? `<small>↳ child of ${esc(r.parent_run_id)}</small>` : '';
-    el.innerHTML = `<div>${esc(r.model || 'model?')} ${pill(r.status)}</div>
+    node.innerHTML = `<div>${esc(r.model || 'model?')} ${pill(r.status)}</div>
       <small>${esc(r.title || 'untitled')} · ${esc(r.run_id)}</small>
       ${parent}
       <small>${new Date(r.started_at * 1000).toLocaleString()}</small>`;
-    el.onclick = () => openRun(r.run_id);
-    el.dataset.run = r.run_id;
-    if (r.run_id === current) el.setAttribute('aria-current', 'true');
-    return el;
+    node.addEventListener('click', () => openRun(r.run_id, { append: false }));
+    node.dataset.run = r.run_id;
+    if (r.run_id === currentRun) node.setAttribute('aria-current', 'true');
+    return node;
   }));
 }
 
-function render(ev) {
-  const row = document.createElement('div');
-  row.className = 'ev';
+function newSession() {
+  if (streamController) streamController.abort();
+  currentRun = null; currentSession = null; currentStatus = null;
+  events = [];
+  metaEl.replaceChildren(el('span', '', 'new session'));
+  viewEl.replaceChildren(el('p', 'empty', 'Type a message below to start a run.'));
+  promptEl.focus();
+}
+
+// ---------------------------------------------------------------- transcript
+
+const lastIndexOf = (type) => {
+  for (let i = events.length - 1; i >= 0; i -= 1) if (events[i].type === type) return i;
+  return -1;
+};
+
+function userBubble(text) { return el('div', 'msg user', text); }
+function agentBubble(text) { return el('div', 'msg agent', text); }
+
+function callCard(call) {
+  const card = el('div', 'card');
+  const head = el('div', 'head');
+  head.innerHTML = `<span class="name">${esc(call.name)}</span><span>${esc(call.id || '')}</span>`;
+  card.appendChild(head);
+  const args = JSON.stringify(call.arguments || {}, null, 2);
+  card.appendChild(el('div', 'body', args));
+  card.dataset.call = call.id || call.name;
+  return card;
+}
+
+function attachResult(card, result) {
+  const body = el('div', 'body out');
+  const prefix = result.denied ? 'denied · ' : result.is_error ? 'error · ' : '';
+  body.textContent = prefix + String(result.content ?? '');
+  card.appendChild(body);
+  if (result.denied || result.is_error) card.classList.add('denied');
+}
+
+function guardrailNote(ev) {
+  const checks = ev.payload.checks;
+  const parts = Array.isArray(checks)
+    ? checks.map((c) => (typeof c === 'string' ? c
+        : `${c.guardrail || c.name || '?'} ${c.verdict || ''}`.trim())).join(' · ')
+    : JSON.stringify(checks || '');
+  const node = el('div', 'note');
+  node.innerHTML = `<span class="hook">guardrail · ${esc(ev.payload.hook || '')}</span> `
+    + `<span>${esc(parts)}</span>`;
+  return node;
+}
+
+function approvalCard(ev, index, answeredAt) {
+  const card = el('div', 'card');
+  const head = el('div', 'head');
+  head.innerHTML = `<span class="name">${esc(ev.payload.tool)}</span>
+    <span>side-effecting · needs approval</span>`;
+  card.appendChild(head);
+  card.appendChild(el('div', 'body', JSON.stringify(ev.payload.arguments || {}, null, 2)));
+  const row = el('div', 'approve');
+  const yes = el('button', 'yes', 'approve');
+  const no = el('button', 'no', 'deny');
+  yes.addEventListener('click', () => answerApproval(true));
+  no.addEventListener('click', () => answerApproval(false));
+  row.append(yes, no);
+  // Once answered, the verdict line below carries the outcome; buttons that do
+  // nothing are worse than no buttons.
+  if (answeredAt <= index && config.chat && config.approvals === 'page') {
+    card.appendChild(row);
+  }
+  return card;
+}
+
+async function answerApproval(approve) {
+  if (!currentRun) return;
+  setBusy(true);
+  try {
+    const res = await postJson(`/api/runs/${currentRun}/approval`,
+      { approve, note: approve ? 'approved in the web view' : 'denied in the web view' });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      viewEl.appendChild(el('p', 'note', detail.detail || 'could not answer the approval'));
+      setBusy(false);
+    }
+  } catch {
+    viewEl.appendChild(el('p', 'note', 'could not reach the service'));
+    setBusy(false);
+  }
+}
+
+function verdictCard(ev) {
+  const approved = ev.payload.approved;
+  const node = el('div', 'note');
+  node.innerHTML = `<span class="hook">${approved ? 'approved' : 'denied'} · ${esc(ev.payload.tool)}</span> `
+    + `<span>${esc(ev.payload.note || '')}</span>`;
+  return node;
+}
+
+function footCard() {
+  // Counts belong to the run on screen, not to the earlier turns preloaded above.
+  const mine = events.filter((e) => !e.run_id || e.run_id === currentRun);
+  const finished = mine.filter((e) => e.type === 'run_finished').pop();
+  if (!finished) return null;
+  const steps = mine.filter((e) => e.type === 'model_response').length;
+  let tokens = 0, out = 0;
+  for (const ev of mine) {
+    if (ev.type !== 'model_response') continue;
+    const usage = ev.payload.usage || {};
+    tokens += Number(usage.input_tokens || 0);
+    out += Number(usage.output_tokens || 0);
+  }
+  const node = el('div', 'foot');
+  node.innerHTML = `<span>${pill(finished.payload.status || currentStatus || 'ok')}</span>
+    <span>${steps} model turns</span>
+    <span>${tokens} in / ${out} out tokens</span>
+    <span>${esc(currentRun || '')}</span>`;
+  return node;
+}
+
+function rawRow(ev) {
+  const row = el('div', 'raw');
+  row.innerHTML = `<time>${clock(ev.ts)}</time>
+    <span class="type">${esc(ev.type)}</span><span class="body"></span>`;
   const payload = ev.payload || {};
   const brief = Object.keys(payload).length ? JSON.stringify(payload) : '';
-  row.innerHTML = `<time>${clock(ev.ts)}</time>
-    <span class="type">${esc(ev.type)}</span>
-    <span class="body"></span>`;
-  const body = row.querySelector('.body');
   const text = payload.content ?? payload.error ?? brief;
-  body.textContent = text.length > 600 ? text.slice(0, 600) + '…' : text;
+  row.querySelector('.body').textContent =
+    String(text).length > 600 ? String(text).slice(0, 600) + '…' : String(text);
   return row;
 }
 
-function openRun(runId) {
-  current = runId;
-  [...runsEl.children].forEach((el) =>
-    el.dataset.run === runId ? el.setAttribute('aria-current', 'true')
-                             : el.removeAttribute('aria-current'));
-  logEl.replaceChildren();
-  metaEl.innerHTML = `<span>${esc(runId)}</span>`;
-  if (streamController) streamController.abort();
-
-  api(`/api/runs/${runId}`).then((r) => r.json()).then(({ run }) => {
-    metaEl.innerHTML = `<span>${esc(run.run_id)}</span>
-      ${run.parent_run_id ? `<span>child of ${esc(run.parent_run_id)}</span>` : ''}
-      <span>${esc(run.model || '')}</span>
-      <span>${pill(run.status)}</span>
-      <span>${esc(run.title || 'untitled session')}</span>
-      <span>started ${new Date(run.started_at * 1000).toLocaleString()}</span>`;
+function renderAll() {
+  if (!events.length) {
+    viewEl.replaceChildren(el('p', 'empty',
+      currentRun ? 'waiting for the first event…' : 'No run selected.'));
+    return;
+  }
+  if (showRaw) {
+    viewEl.replaceChildren(...events.map(rawRow));
+    viewEl.scrollTop = viewEl.scrollHeight;
+    return;
+  }
+  const nodes = [];
+  const calls = new Map();
+  const answeredAt = lastIndexOf('approval_verdict');
+  events.forEach((ev, index) => {
+    const p = ev.payload || {};
+    switch (ev.type) {
+      case 'input_received':
+        nodes.push(userBubble(p.content || ''));
+        break;
+      case 'model_response':
+        if (p.content) nodes.push(agentBubble(p.content));
+        break;
+      case 'tool_call': {
+        const card = callCard(p);
+        calls.set(p.id || p.name, card);
+        nodes.push(card);
+        break;
+      }
+      case 'tool_result': {
+        const card = calls.get(p.call_id);
+        if (card) attachResult(card, p);
+        else {
+          const lone = el('div', 'card');
+          lone.appendChild(el('div', 'body out', String(p.content ?? '')));
+          nodes.push(lone);
+        }
+        break;
+      }
+      case 'guardrail_verdict':
+        nodes.push(guardrailNote(ev));
+        break;
+      case 'approval_requested':
+        nodes.push(approvalCard(ev, index, answeredAt));
+        break;
+      case 'approval_verdict':
+        nodes.push(verdictCard(ev));
+        break;
+      case 'escalation':
+        nodes.push(el('div', 'note', `escalated · ${p.reason || ''} — ${p.summary || ''}`));
+        break;
+      case 'error':
+        nodes.push(el('div', 'note', `error · ${p.error || ''}`));
+        break;
+      case 'run_finished':
+        break;
+      default:
+        break;
+    }
   });
+  const foot = footCard();
+  if (foot) nodes.push(foot);
+  viewEl.replaceChildren(...nodes);
+  viewEl.scrollTop = viewEl.scrollHeight;
+}
+
+// --------------------------------------------------------------------- runs
+
+function renderMeta(run) {
+  metaEl.replaceChildren(...[
+    el('span', '', run.run_id),
+    run.parent_run_id ? el('span', '', `child of ${run.parent_run_id}`) : null,
+    el('span', '', run.model || ''),
+    el('span', '', run.session_id || ''),
+    el('span', '', run.title || 'untitled session'),
+  ].filter(Boolean));
+  const toggle = el('label');
+  const box = el('input');
+  box.type = 'checkbox';
+  box.checked = showRaw;
+  box.addEventListener('change', () => { showRaw = box.checked; renderAll(); });
+  toggle.append(box, el('span', '', 'raw events'));
+  metaEl.appendChild(toggle);
+}
+
+// The session is the conversation: opening a turn shows the turns before it.
+async function preloadSession(sessionId, exceptRunId, beforeTs) {
+  try {
+    const res = await api(`/api/sessions/${sessionId}`);
+    if (!res.ok) return;
+    const { turns } = await res.json();
+    const earlier = [];
+    for (const turn of turns) {
+      if (turn.run.run_id === exceptRunId) continue;
+      if (beforeTs !== undefined && turn.run.started_at >= beforeTs) continue;
+      earlier.push(...turn.events.map((e) => Object.assign({}, e, { run_id: turn.run.run_id })));
+    }
+    events = earlier;
+  } catch { /* no history is not an error */ }
+}
+
+async function openRun(runId, opts) {
+  const append = Boolean(opts && opts.append);
+  currentRun = runId;
+  if (!append) events = [];
+  if (streamController) streamController.abort();
+  [...runsEl.children].forEach((node) =>
+    node.dataset.run === runId ? node.setAttribute('aria-current', 'true')
+                              : node.removeAttribute('aria-current'));
+  renderAll();
+  setBusy(true);
+
+  let run = null;
+  try {
+    const res = await api(`/api/runs/${runId}`);
+    if (res.ok) run = (await res.json()).run;
+  } catch { /* the stream reports the failure */ }
+  if (run) {
+    currentSession = run.session_id;
+    currentStatus = run.status;
+    renderMeta(run);
+    if (!append && run.session_id) {
+      await preloadSession(run.session_id, runId, run.started_at);
+      renderAll();
+    }
+  }
 
   streamRun(runId);
 }
@@ -460,8 +868,8 @@ async function streamRun(runId) {
   streamController = new AbortController();
   const signal = streamController.signal;
   let res;
-  try { res = await api(`/api/runs/${runId}/stream`); } catch { return; }
-  if (!res.ok || !res.body) return;
+  try { res = await api(`/api/runs/${runId}/stream`); } catch { setBusy(false); return; }
+  if (!res.ok || !res.body) { setBusy(false); return; }
 
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
@@ -491,15 +899,57 @@ function handleFrame(frame) {
     if (line.startsWith('event: ')) event = line.slice(7).trim();
     else if (line.startsWith('data: ')) data.push(line.slice(6));
   }
-  if (event === 'end') { loadRuns(); return false; }
+  if (event === 'end') {
+    setBusy(false);
+    loadRuns();
+    return false;
+  }
   if (data.length) {
-    logEl.append(render(JSON.parse(data.join('\n'))));
-    logEl.scrollTop = logEl.scrollHeight;
+    const ev = JSON.parse(data.join('\n'));
+    ev.run_id = currentRun;
+    events.push(ev);
+    if (ev.type === 'run_finished' || ev.type === 'error') setBusy(false);
+    renderAll();
   }
   return true;
 }
 
-loadRuns();
+// ------------------------------------------------------------------ compose
+
+composer.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const text = promptEl.value.trim();
+  if (!text || busy) return;
+  promptEl.value = '';
+  setBusy(true);
+  try {
+    const res = await postJson('/api/chat', { prompt: text, session_id: currentSession });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      viewEl.appendChild(el('p', 'note', detail.detail || `could not start a run (${res.status})`));
+      setBusy(false);
+      return;
+    }
+    const started = await res.json();
+    currentSession = started.session_id;
+    // Append, so the previous turns of this session stay on screen.
+    openRun(started.run_id, { append: true });
+  } catch {
+    viewEl.appendChild(el('p', 'note', 'could not reach the service'));
+    setBusy(false);
+  }
+});
+
+promptEl.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    composer.requestSubmit();
+  }
+});
+
+document.getElementById('new').addEventListener('click', newSession);
+
+loadConfig().then(() => { loadRuns(); if (config.chat) promptEl.focus(); });
 </script>
 </html>
 """

@@ -75,10 +75,18 @@ def _parser() -> argparse.ArgumentParser:
     chat.add_argument("manifest")
     chat.add_argument("--db", default=None)
     chat.add_argument("--session", default=None, help="resume a session id")
+    chat.add_argument("--model", default=None, help="override the manifest's model")
+    chat.add_argument("--profile", default=None,
+                      help="override the manifest credential_profile (e.g. default)")
     chat.add_argument("--show-reasoning", action="store_true")
 
-    serve = sub.add_parser("serve", help="read-only web view of the event log (v0.5)")
+    serve = sub.add_parser("serve", help="web view of the event log; --manifest adds chat")
     serve.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
+    serve.add_argument("--manifest", default=None,
+                       help="enable chat: path to agent.yaml (needs RIGGING_SERVICE_TOKEN)")
+    serve.add_argument("--model", default=None, help="override the manifest's model (chat)")
+    serve.add_argument("--profile", default=None,
+                       help="override the manifest credential_profile (chat)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--ssl-certfile", default=None,
@@ -192,6 +200,10 @@ def cmd_chat(args: argparse.Namespace) -> int:
     from rigging.chat import chat
 
     spec = load_manifest(args.manifest)
+    if args.model:
+        spec = spec.model_copy(update={"model": args.model})
+    if args.profile:
+        spec = spec.model_copy(update={"credential_profile": args.profile})
     log = EventLog(args.db or settings.db_path)
 
     def emit(delta: Any) -> None:
@@ -284,6 +296,21 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not pathlib.Path(db).exists():
         print(f"no event log at {db} — run an agent first", file=sys.stderr)
         return 2
+    runner = None
+    if args.manifest:
+        from rigging.service.chat import ChatRunner
+
+        spec = load_manifest(args.manifest)
+        if args.model:
+            spec = spec.model_copy(update={"model": args.model})
+        if args.profile:
+            spec = spec.model_copy(update={"credential_profile": args.profile})
+        if not settings.service_token.strip():
+            print("chat needs RIGGING_SERVICE_TOKEN: any page the browser visits can "
+                  "POST to a loopback port (ADR-0023). Set a token, or drop --manifest "
+                  "for the read-only view.", file=sys.stderr)
+            return 2
+        runner = ChatRunner(spec, db)
     if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
         print("--ssl-certfile and --ssl-keyfile go together", file=sys.stderr)
         return 2
@@ -299,7 +326,11 @@ def cmd_serve(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
     scheme = "https" if tls else "http"
-    print(f"rigging runs: {scheme}://{args.host}:{args.port}  (read-only, db={db})")
+    mode = "chat + runs" if runner is not None else "read-only"
+    print(f"rigging runs: {scheme}://{args.host}:{args.port}  ({mode}, db={db})")
+    if runner is not None:
+        print(f"agent: {runner.spec.name} · {runner.spec.model} "
+              f"(profile {runner.spec.credential_profile or 'default'})")
     print(f"auth: {'bearer token' if tokens else 'none — loopback only (ADR-0021)'}")
     print("rate limit: "
           + (f"{settings.service_rate_limit}/min per client"
@@ -309,7 +340,8 @@ def cmd_serve(args: argparse.Namespace) -> int:
           "proxy trust: off — every client shares the socket peer's bucket")
     uvicorn.run(
         create_app(db, tokens=tokens,
-                   rate_limit_per_minute=settings.service_rate_limit),
+                   rate_limit_per_minute=settings.service_rate_limit,
+                   runner=runner),
         host=args.host, port=args.port,
         ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
         proxy_headers=True, forwarded_allow_ips=trusted,

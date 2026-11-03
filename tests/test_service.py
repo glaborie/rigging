@@ -107,10 +107,14 @@ def test_unknown_run_is_a_404(tmp_path):
 
 
 def test_the_service_never_writes(tmp_path):
-    """The log is opened read-only, so a write attempt fails instead of drifting."""
+    """Without a manifest the log is read-only: every route is a GET (ADR-0018)."""
     log, run_id = _finished_run(tmp_path)
     app = create_app(log.path)
-    assert len(app.routes) == 4  # /, /api/runs, /api/runs/{id}, /api/runs/{id}/stream
+    assert {route.path for route in app.routes if hasattr(route, "methods")} == {
+        "/", "/api/runs", "/api/config", "/api/runs/{run_id}",
+        "/api/sessions/{session_id}", "/api/runs/{run_id}/stream",
+    }
+    assert all(route.methods == {"GET"} for route in app.routes if hasattr(route, "methods"))
     before = (tmp_path / "runs.db").read_bytes()
     TestClient(app).get(f"/api/runs/{run_id}")
     assert (tmp_path / "runs.db").read_bytes() == before

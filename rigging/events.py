@@ -84,6 +84,9 @@ class EventLog:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(self.path))
+        # A run started from the web view writes while the page reads. SQLite's
+        # default is to fail a locked writer immediately; wait instead.
+        self._db.execute("PRAGMA busy_timeout=5000")
         self._db.row_factory = sqlite3.Row
         self._db.executescript(SCHEMA)
         self._db.commit()
@@ -101,20 +104,37 @@ class EventLog:
         return session_id
 
     def start_run(self, *, session_id: str | None = None, spec_hash: str = "", model: str = "",
-                  parent_run_id: str | None = None) -> str:
-        run_id = f"r_{uuid.uuid4().hex[:12]}"
-        self._db.execute(
-            "INSERT INTO runs(run_id, session_id, started_at, status, spec_hash, model, parent_run_id)"
-            " VALUES (?,?,?,?,?,?,?)",
+                  parent_run_id: str | None = None, run_id: str | None = None) -> str:
+        """Open a run, or confirm one the caller already named.
+
+        The web view names the run before starting its thread so the page can
+        subscribe to the stream without racing the first event. Passing an
+        existing id is therefore idempotent: the row and `run_started` are
+        written once.
+        """
+        run_id = run_id or f"r_{uuid.uuid4().hex[:12]}"
+        inserted = self._db.execute(
+            "INSERT OR IGNORE INTO runs(run_id, session_id, started_at, status, spec_hash,"
+            " model, parent_run_id) VALUES (?,?,?,?,?,?,?)",
             (run_id, session_id, time.time(), "running", spec_hash, model, parent_run_id),
-        )
+        ).rowcount
         self._db.commit()
-        self.append(run_id, "run_started", {"model": model, "spec_hash": spec_hash})
+        if inserted:
+            self.append(run_id, "run_started", {"model": model, "spec_hash": spec_hash})
         return run_id
 
     def append(self, run_id: str, type_: EventType | str, payload: dict[str, Any],
                *, span_id: str | None = None, parent_run_id: str | None = None) -> int:
-        seq = self._seq.get(run_id, 0) + 1
+        # The in-memory cursor is per instance, and a run can be written by more
+        # than one: the web view names a run, then its worker thread opens its own
+        # log. Fall back to the log itself before appending a duplicate seq.
+        seq = self._seq.get(run_id)
+        if seq is None:
+            row = self._db.execute(
+                "SELECT COALESCE(MAX(seq), 0) FROM run_events WHERE run_id=?", (run_id,)
+            ).fetchone()
+            seq = int(row[0])
+        seq += 1
         self._seq[run_id] = seq
         self._db.execute(
             "INSERT INTO run_events(run_id, seq, ts, type, payload, span_id, parent_run_id)"
@@ -159,6 +179,23 @@ class EventLog:
                 p = ev["payload"]
                 out.append(Message(role="tool", name=p.get("name"),
                                    tool_call_id=p.get("call_id"), content=p.get("content", "")))
+        return out
+
+    def session_messages(self, session_id: str) -> list[Message]:
+        """Projection: the session's conversation across its root runs, in order.
+
+        Child runs (subagents) share the session id but are not the user's
+        conversation, so they are excluded. Used by the web view to rebuild
+        multi-turn history from the log instead of a server-side dict.
+        """
+        out: list[Message] = []
+        rows = self._db.execute(
+            "SELECT run_id FROM runs WHERE session_id=? AND parent_run_id IS NULL"
+            " ORDER BY started_at, run_id",
+            (session_id,),
+        )
+        for row in rows:
+            out.extend(self.messages(row["run_id"]))
         return out
 
     def usage(self, run_id: str) -> Usage:

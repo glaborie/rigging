@@ -201,34 +201,47 @@ def register_tools(reg: Registry) -> None:
 Entry-points are discovered automatically during `assemble()` and logged to stderr.
 To disable discovery, pass an explicit `Registry()` with `registry=registry` to
 `assemble()` or `run_agent()`.
-## 8. The web view (v0.5, ADR-0018)
+## 8. The web view (v0.5 read-only, v0.7 chat; ADR-0018, ADR-0023)
 
-`rigging/service/` is a projection, not a layer: it reads `sessions`, `runs` and
-`run_events` and nothing else.
+`rigging/service/` is a projection, not a layer: every read is a query over
+`sessions`, `runs` and `run_events`. Two modes share one page.
 
 | Route | Shape |
 |---|---|
 | `GET /` | one HTML page, vanilla JS, no build step |
+| `GET /api/config` | whether chat is on, and which agent/model it would run |
 | `GET /api/runs?limit=` | recent runs joined to their session title |
 | `GET /api/runs/{id}` | the run plus its events, in `seq` order |
+| `GET /api/sessions/{id}` | every root run of a session with its events, oldest first |
 | `GET /api/runs/{id}/stream` | SSE: replay, then tail by `seq` until the run ends, goes idle, or hits `timeout` |
+| `POST /api/chat` | *(with `--manifest`)* start one `run_agent`, return `{session_id, run_id}` |
+| `POST /api/runs/{id}/approval` | *(with `--manifest`)* answer a waiting side-effecting tool |
 
-Three properties are deliberate:
+Properties that stay deliberate:
 
-- **No writes.** The log is opened with SQLite `mode=ro`, so the read-only claim
-  is enforced by the driver, not by discipline. There is no launch or approve
-  endpoint: approvals stay in the loop where `ApprovalPolicy` lives.
-- **No second store.** The page renders whatever is in the log, so it cannot
-  drift from `harness runs` or the eval CLI.
+- **Reads never write.** The read path opens the log with SQLite `mode=ro`, so
+  the read-only claim is enforced by the driver, not by discipline.
+- **One loop.** The write path calls `run_agent` in a worker thread — the same
+  function `harness run` calls — and returns before the turn finishes; the page
+  follows the run through the same SSE route. There is no second loop and no
+  second streaming implementation.
+- **Approvals stay in the loop.** `WebApproval` is an `ApprovalPolicy` that blocks
+  the loop thread until the page answers; the loop writes `approval_requested`
+  and `approval_verdict` and makes the decision. No answer in ten minutes is a
+  denial. The page cannot approve anything the loop did not ask about.
+- **No second store.** The page renders whatever is in the log, and multi-turn
+  history is `EventLog.session_messages()` — a projection over the session's root
+  runs. A restart loses nothing.
 - **No push infrastructure.** The SSE generator polls `run_events` every 300 ms
   by `seq`. A run that outlives `idle_seconds` closes the connection; the page
   does not auto-reconnect (it uses `fetch` + `ReadableStream` so it can send a
   bearer header), so the reader reopens the stream by picking the run again. That
   keeps a long agent run from pinning a worker forever.
 
-The cost is stated in the ADR: read-only means no interactivity, and a token or
-a loopback bind is the whole deployment story — it is a development window, not
-a product.
+The write path is opt-in: without `--manifest` the app has no POST route, which
+is exactly ADR-0018. With it, chat requires `RIGGING_SERVICE_TOKEN` even on
+loopback — any page the browser visits can POST to a local port — and a second
+turn while a run is in flight is a `409` rather than two interleaved histories.
 
 Auth (ADR-0021) is one bearer token, `RIGGING_SERVICE_TOKEN`, checked with
 `hmac.compare_digest` on every `/api/*` route. `GET /` stays public: it is static
@@ -251,9 +264,11 @@ claimed — is [`threat-model.md`](threat-model.md).
 The page is a real browser test, not just a route test:
 `tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in
 headless Chromium, and asserts the run list renders with no page error
-(`make test-browser`, `[browser]` extra, its own CI job). It exists because
-v0.6.0 shipped a page whose inline JS failed to parse while `GET /` still
-answered 200 — see the postscript in ADR-0018.
+(`make test-browser`, `[browser]` extra, its own CI job). A second test drives
+the write path: it types a prompt, clicks approve on the approval card, and
+asserts the tool result appears. It exists because v0.6.0 shipped a page whose
+inline JS failed to parse while `GET /` still answered 200 — see the postscript
+in ADR-0018.
 
 ## 9. Subagents (v0.6, ADR-0019)
 

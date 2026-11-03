@@ -51,11 +51,12 @@ def _free_port() -> int:
 class _Server:
     """Run the ASGI app on a real loopback socket for the browser to hit."""
 
-    def __init__(self, db: str, port: int) -> None:
+    def __init__(self, db: str, port: int, **kwargs: object) -> None:
         import uvicorn
 
         self._server = uvicorn.Server(
-            uvicorn.Config(create_app(db), host="127.0.0.1", port=port, log_level="error")
+            uvicorn.Config(create_app(db, **kwargs), host="127.0.0.1", port=port,
+                           log_level="error")
         )
         self._thread = threading.Thread(target=self._server.run, daemon=True)
 
@@ -92,5 +93,81 @@ def test_the_page_renders_the_run_list(tmp_path):
             assert errors == [], f"the page raised: {errors}"
             violations = [m for m in console if "Content Security Policy" in m]
             assert violations == [], f"the CSP blocked the page's own code: {violations}"
+        finally:
+            browser.close()
+
+
+def test_the_page_can_run_a_turn_and_approve_it(tmp_path):
+    """ADR-0023 end to end: type, run, approve, see the tool result.
+
+    The route tests prove the bytes; only a browser proves the page wires the
+    composer to the write path and the approval buttons to the loop.
+    """
+    import yaml
+
+    from rigging.manifest import load_manifest
+    from rigging.registry import Registry
+    from rigging.service import ChatRunner
+    from rigging.testing import FakeClient
+
+    db = tmp_path / "chat.db"
+    EventLog(db).close()
+
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump({
+        "name": "browser chat", "model": "fake", "system_prompt": "be terse",
+        "limits": {"max_steps": 4}, "tools": ["refund"],
+        "approval": {"policy": "cli", "side_effecting_tools": ["refund"]},
+    }))
+    reg = Registry()
+
+    def refund(amount: int) -> str:
+        """Refund money."""
+        return f"refunded {amount}"
+
+    refund.__rigging_tool__ = {"name": "refund", "description": "Refund money.",
+                               "side_effecting": True}
+    reg.add("tool", "refund", refund)
+
+    client = FakeClient([
+        {"role": "assistant", "content": "checking the order",
+         "tool_calls": [{"id": "1", "name": "refund", "arguments": {"amount": 10}}]},
+        {"role": "assistant", "content": "the refund went through"},
+    ])
+    runner = ChatRunner(load_manifest(str(path)), str(db),
+                        client_factory=lambda: client, registry=reg)
+    token = "browser-token"
+
+    with _Server(str(db), _free_port(), tokens=[token], runner=runner) as base_url, \
+            sync_playwright() as play:
+        try:
+            browser = play.chromium.launch()
+        except PlaywrightError as exc:  # no Chromium downloaded
+            pytest.skip(f"chromium is not installed: {exc}")
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        try:
+            # The page keeps the token in sessionStorage; set it before the first
+            # fetch so no dialog has to be answered.
+            page.add_init_script(
+                f"sessionStorage.setItem('rigging.token', {token!r});"
+            )
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.wait_for_selector("#composer:not([hidden])", timeout=10_000)
+
+            page.fill("#prompt", "refund 10 for ORD-1")
+            page.press("#prompt", "Enter")
+
+            page.wait_for_selector(".approve button.yes", timeout=10_000)
+            prompt_card = page.locator(".card", has=page.locator(".approve"))
+            assert "side-effecting" in prompt_card.inner_text()
+            page.click(".approve button.yes")
+
+            page.wait_for_selector("text=refunded 10", timeout=10_000)
+            page.wait_for_selector(".foot", timeout=10_000)
+            text = page.inner_text("#view")
+            assert "the refund went through" in text
+            assert errors == [], f"the page raised: {errors}"
         finally:
             browser.close()

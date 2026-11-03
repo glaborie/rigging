@@ -1,7 +1,8 @@
 # ADR-0017: Deliberate non-goals
 
 **Status:** Accepted; partly superseded by ADR-0018 (web UI), ADR-0019
-(subagents), ADR-0021 (service auth) and ADR-0022 (parallel tool execution).
+(subagents), ADR-0021 (service auth), ADR-0022 (parallel tool execution) and
+ADR-0023 (a write-capable web UI).
 
 ## Context
 
@@ -16,8 +17,8 @@ README never lists something the code now does.
 Still explicitly out of scope, stated in the README: agent long-term or vector
 memory; serving MCP (ADR-0013 keeps consumption-only); LLM-as-judge guardrails or
 evals (ADR-0009); local tokenizer estimation and pre-call cost aborts (ADR-0011);
-model fine-tuning; Windows-native support (WSL/Linux first); a third-party plugin
-marketplace beyond entry points themselves; and a *write-capable* web UI.
+model fine-tuning; Windows-native support (WSL/Linux first); and a third-party
+plugin marketplace beyond entry points themselves.
 
 ### Superseded — built after all
 
@@ -31,6 +32,7 @@ prediction was right.
 | multi-agent orchestration in v1 | subagents as child runs (v0.6) | ADR-0019 |
 | user auth before the service milestone | bearer-token service auth (v0.6) | ADR-0021 |
 | parallel tool execution | opt-in `parallel_tools` (v0.6) | ADR-0022 |
+| a *write-capable* web UI | opt-in chat with in-page approvals (v0.7) | ADR-0023 |
 
 The clause each superseding ADR replaces is named in its own Status line, so the
 chain is readable in both directions.

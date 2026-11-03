@@ -300,7 +300,8 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
               stream: Callable[[ModelDelta], None] | None = None,
               approval: Any = None, prices: PriceTable | None = None,
               history: list[Message] | None = None,
-              parent_run_id: str | None = None, depth: int = 0) -> RunResult:
+              parent_run_id: str | None = None, depth: int = 0,
+              run_id: str | None = None) -> RunResult:
     agent = assemble(spec, registry=registry, client=client, prices=prices)
     if approval is not None:
         agent.approval = approval
@@ -339,7 +340,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     owns_log = log is None
     session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
     run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
-                           parent_run_id=parent_run_id)
+                           parent_run_id=parent_run_id, run_id=run_id)
 
     system = spec.prompt().strip()
     if agent.skills is not None:

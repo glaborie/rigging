@@ -65,17 +65,18 @@ loopback by default, which is safe only because it does not leave the host.
 | ID | Threat | Control | Residual risk |
 |---|---|---|---|
 | T1 | Bearer token sniffed on plain HTTP | `harness serve` **refuses a non-loopback bind with a token over plain HTTP** unless `--ssl-certfile/--ssl-keyfile` are given or `RIGGING_SERVICE_ALLOW_PLAINTEXT=1` is set; the documented deployment is TLS at a proxy with a loopback bind (§5) | An operator who sets the opt-in flag on an untrusted network is on their own; the refusal is a guard rail, not a network control |
-| T2 | Token stolen by XSS and reused | No third-party scripts, no CDN, no build step; CSP with a per-response nonce blocks external script/style and framing; every payload is escaped (`esc`) or set with `textContent`; token is read-only and rotatable | Any same-origin script can read `sessionStorage`. Accepted: one read-only scope, no write endpoints, token in `sessionStorage` (cleared when the tab closes) |
+| T2 | Token stolen by XSS and reused | No third-party scripts, no CDN, no build step; CSP with a per-response nonce blocks external script/style and framing; every payload is escaped (`esc`) or set with `textContent`; token is rotatable | Any same-origin script can read `sessionStorage`. In read-only mode that buys transcripts; in chat mode it could also start a run or approve a tool, so the CSP and the no-third-party-script rule are load-bearing (ADR-0023) |
 | T3 | Token guessing / credential stuffing | Token compared with `hmac.compare_digest`; per-client rate limit checked **before** auth, `429` + `Retry-After` | No account lockout and no per-user identity; use a high-entropy random token (≥ 32 bytes) |
 | T4 | Request flood, or a client pinning workers with SSE | Per-client fixed-window limiter (240/min default, `RIGGING_SERVICE_RATE_LIMIT`, `0` disables); the key is the peer address, or the `X-Forwarded-For` client only when the peer is in `RIGGING_SERVICE_TRUSTED_PROXIES`; SSE ends on `idle` and `timeout` | In-process, resets on restart. If the proxy is untrusted or does not set the header, all clients share one bucket, so a single script can exhaust it and deny others (availability, not auth). The proxy's own limiter is the primary control |
 | T5 | Transcript disclosure through a redaction gap | Redaction before insert; tests assert on the DB file; the service never re-reads a raw payload because none is stored | Pattern-based redaction misses unstructured identifiers. Treat the DB as confidential regardless |
 | T6 | Service exposed without auth by mistake | Loopback default; startup refuses non-loopback without a token; `GET /` serves no run data | A misconfigured proxy or a permissive firewall is outside the app |
 | T7 | Local user or stolen backup reads the DB | The app does not add encryption at rest; rely on file permissions (`0600`), full-disk encryption, and encrypted backups | Same-host user with file access reads everything. No app-level encryption |
-| T8 | CSRF / cross-origin reads | The credential is a header, not a cookie, so a cross-site form or image cannot authenticate; no CORS middleware; `form-action 'none'`, `frame-ancestors 'none'` | A browser extension with host access is outside the model |
+| T8 | CSRF / cross-origin reads, or a page the operator visits POSTing to a loopback port | The credential is a header, not a cookie, so a cross-site form or image cannot authenticate; no CORS middleware, so a cross-origin JSON POST fails its preflight; chat additionally **requires a token even on loopback** (ADR-0023) | A browser extension with host access is outside the model |
 | T9 | Clickjacking | `frame-ancestors 'none'` + `X-Frame-Options: DENY` | — |
 | T10 | Run payload injects script into the page | Payloads escaped or assigned with `textContent`; CSP nonce; no `eval`, no `innerHTML` with unescaped data | A future edit that adds an unescaped sink would be a regression; the browser test loads real data |
 | T11 | Supply chain | Four core dependencies (`httpx`, `pydantic`, `pydantic-settings`, `pyyaml`); the service is an extra; no CDN; `uv.lock` committed | Upstream compromise is not modelled; pin and audit in the deployment pipeline |
 | T12 | Token has no expiry or revocation | Rotation is a restart with a comma-separated list (`old,new`) | No per-token expiry, no revocation list, no session concept |
+| T14 | The chat write path spends money or runs tools without the operator | Opt-in (`--manifest`); token required even on loopback; one turn at a time per session (`409`); the loop's `ApprovalPolicy` still gates every side-effecting tool, and `WebApproval` only carries the page's answer | A holder of the token can start runs by design; there is no per-user quota. The demo DB's `refund_order` records intent, it does not move money |
 | T13 | No record of **who** read what | The service logs nothing by default; the proxy can log requests | No per-user audit trail. A regulated deployment needs OIDC + audit (see §7) |
 
 ---
@@ -91,7 +92,10 @@ loopback by default, which is safe only because it does not leave the host.
 | Page actually runs under CSP | `INDEX_HTML` nonce attributes | `test_service_browser.py` (headless Chromium) |
 | Read-only database | `_connect` (`mode=ro`) | `test_the_service_never_writes` |
 | Redaction before insert | `rigging/redact.py` | `test_redact.py` (asserts on the DB file) |
-| No write/launch/approve endpoint | route list is four entries | `test_the_service_never_writes` |
+| No write/launch/approve route without a manifest | route list is six GETs | `test_the_service_never_writes` |
+| Chat refuses to exist without a token | `create_app` guard | `test_chat_refuses_to_exist_without_a_token` |
+| Approval is answered by the loop's policy, not the page | `service/chat.py::WebApproval` | `test_approval_is_answered_from_the_page`, `test_denied_approval_blocks_the_tool` |
+| The page's write path works in a real browser | `INDEX_HTML` | `test_service_browser.py::test_the_page_can_run_a_turn_and_approve_it` |
 
 `make check` runs all of it offline. `make test-browser` runs the page in
 headless Chromium, because a `200` is not evidence that the page renders.

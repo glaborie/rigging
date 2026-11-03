@@ -3,15 +3,16 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-11-03):** v0.1–v0.5 are shipped and v0.6 (scale-out) is
-released as v0.6.3 (v0.6.0 was tagged, then patched for doc drift and the page
-bug in v0.6.1, hardened in v0.6.2, and given an explicit proxy-trust model in
-v0.6.3 — see the v0.6 sections). v0.5
-delivered the manifest schema, entry-points discovery, the
-architecture/ADR pass, the README recording and the read-only web widget; v0.6
-delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
-execution. 188 offline tests plus a browser smoke test; ruff + `mypy --strict`
-clean. The four v0.6 proofs are in [`showcase-v0.6.md`](showcase-v0.6.md).
+**Current state (2026-11-03):** v0.1–v0.6 are shipped (v0.6.3 was the last patch:
+v0.6.0 was tagged, then patched for doc drift and the page bug in v0.6.1,
+hardened in v0.6.2, and given an explicit proxy-trust model in v0.6.3). v0.5
+delivered the manifest schema, entry-points discovery, the architecture/ADR pass,
+the README recording and the read-only web widget; v0.6 delivered subagents, the
+MLflow exporter, service auth and opt-in parallel tool execution. v0.7.0 makes
+the web view drivable: chat and in-page approvals, opt-in and token-gated
+(ADR-0023). 204 offline tests plus two browser tests; ruff + `mypy --strict`
+clean. The demos are [`showcase-v0.7.md`](showcase-v0.7.md) (browser) and
+[`showcase-v0.6.md`](showcase-v0.6.md) (four commands).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
 repo is operated, so it is recorded here:
@@ -231,6 +232,43 @@ into one bucket.
       table and the shared-bucket availability risk; the README and ADR-0021
       say where the trust list is configured. `make check`: 188 passed; the
       browser test still renders under the CSP.
+
+## v0.7.0 — the demo you can drive (2026-11-03)
+
+The web view could only read. A portfolio demo needs a reviewer to type a prompt
+and watch the harness react, so the page gained a write path — opt-in, token-gated
+and still run by the loop (ADR-0023, which supersedes the write-capable clause of
+ADR-0017 and the no-write clause of ADR-0018).
+
+- [x] **`harness serve --manifest` starts a run from the page.** `POST /api/chat`
+      calls the same `run_agent` as the CLI in a worker thread and returns
+      `{session_id, run_id}`; the page follows the existing SSE route. Without
+      the flag the app has no write route at all.
+- [x] **Approvals answered in the page.** `WebApproval` blocks the loop thread on
+      a `threading.Event` until `POST /api/runs/{id}/approval` answers; the loop
+      still writes `approval_requested`/`approval_verdict` and still decides. No
+      answer in ten minutes is a denial. A second turn while a run is in flight
+      is a 409, so histories cannot interleave.
+- [x] **Multi-turn history is a projection.** `EventLog.session_messages()` joins
+      the session's root runs in order; child runs are excluded. A restart loses
+      nothing and a second tab sees the same conversation.
+- [x] **Named runs.** `run_agent(run_id=...)` and an idempotent
+      `EventLog.start_run` let the page subscribe before the first event. `append`
+      now seeds its seq cursor from the log, so a run can be written by more than
+      one `EventLog` (the web path needs exactly that).
+- [x] **A demo transcript, not a log dump.** User/agent bubbles, one card per tool
+      call with arguments and result, compact guardrail lines, an approval card,
+      and a footer with model turns and tokens. `raw events` shows the unfiltered
+      log. Opening a turn preloads the session's earlier turns.
+- [x] **Writes need a token even on loopback.** `create_app` refuses a
+      chat-enabled app without `RIGGING_SERVICE_TOKEN`; `harness serve --manifest`
+      refuses to start. A page on any origin can POST to a loopback port.
+- [x] **Tested in a browser, not only over HTTP.** The new browser test types a
+      prompt, clicks approve, and asserts the tool result renders — the ADR-0018
+      postscript rule applied to the write path.
+- [x] 15 new tests (13 service + 3 events, plus the browser test).
+      `make check`: 204 passed; `make test-browser`: 2 passed. The demo script is
+      [`showcase-v0.7.md`](showcase-v0.7.md).
 
 ## Standing rules
 

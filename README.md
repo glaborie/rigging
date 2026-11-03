@@ -4,13 +4,13 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.6.3 released (2026-11-03).** The harness includes a registry-driven
+**Status: v0.7.0 released (2026-11-03).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
-subagents as child runs, opt-in parallel tool execution, and a read-only web view
-over the same event log with bearer-token auth. See
-[`docs/milestones.md`](docs/milestones.md) for milestone evidence and
-[`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) for a four-command demo.
+subagents as child runs, opt-in parallel tool execution, and a web view over the
+same event log with bearer-token auth — read-only, or chat with in-page approvals.
+See [`docs/milestones.md`](docs/milestones.md) for milestone evidence and
+[`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo.
 
 ![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
 
@@ -35,28 +35,29 @@ a YAML file. Swapping Qdrant for anything else is one class.
 
 ## Capability matrix
 
-| Capability | Registry source | v0.1 | v0.2 | v0.3 | v0.4 | v0.5 | v0.6 |
-|---|---|:-:|:-:|:-:|:-:|:-:|:-:|
-| Agent loop + streaming | core | ● | | | | | |
-| Tools (JSON-schema function calling) | decorator | ● | | | | | |
-| Registry + entry-point discovery (on by default) | core | ● | | | ● | ● | |
-| Skills (progressive disclosure) | filesystem | | ● | | | | |
-| SQLite event log + sessions | core | | ● | | | | |
-| `harness chat` REPL | core | | ● | | | | |
-| Guardrails (4 built-ins) | decorator | | | ● | | | |
-| Approval policy (side-effecting tools) | decorator | | | ● | | | |
-| Escalation to human | tool | | | ● | | | |
-| Retrieval (Qdrant default, FTS5 reference) | decorator | | | ● | | | |
-| Laya decision model (advisory) | decorator | | | ● | | | |
-| OTel → Langfuse exporters | core | | | | ● | | |
-| MLflow exporter (one run per run, no SDK) | core | | | | | | ● |
-| `harness eval` | core | | | | ● | | |
-| MCP servers as a tool source | entry point | | | | ● | | |
-| Manifest JSON Schema + docs | -- | | | | | ● | |
-| Web widget (read-only, SSE) | extra | | | | | ● | |
-| Subagents (`SubagentRunner`) | manifest + protocol | | | | | | ● |
-| FastAPI service + auth (bearer) | extra | | | | | | ● |
-| Parallel tool execution (opt-in) | manifest flag | | | | | | ● |
+| Capability | Registry source | v0.1 | v0.2 | v0.3 | v0.4 | v0.5 | v0.6 | v0.7 |
+|---|---|:-:|:-:|:-:|:-:|:-:|:-:|:-:|
+| Agent loop + streaming | core | ● | | | | | | |
+| Tools (JSON-schema function calling) | decorator | ● | | | | | | |
+| Registry + entry-point discovery (on by default) | core | ● | | | ● | ● | | |
+| Skills (progressive disclosure) | filesystem | | ● | | | | | |
+| SQLite event log + sessions | core | | ● | | | | | |
+| `harness chat` REPL | core | | ● | | | | | |
+| Guardrails (4 built-ins) | decorator | | | ● | | | | |
+| Approval policy (side-effecting tools) | decorator | | | ● | | | | |
+| Escalation to human | tool | | | ● | | | | |
+| Retrieval (Qdrant default, FTS5 reference) | decorator | | | ● | | | | |
+| Laya decision model (advisory) | decorator | | | ● | | | | |
+| OTel → Langfuse exporters | core | | | | ● | | | |
+| MLflow exporter (one run per run, no SDK) | core | | | | | | ● | |
+| `harness eval` | core | | | | ● | | | |
+| MCP servers as a tool source | entry point | | | | ● | | | |
+| Manifest JSON Schema + docs | -- | | | | | ● | | |
+| Web widget (read-only, SSE) | extra | | | | | ● | | |
+| Subagents (`SubagentRunner`) | manifest + protocol | | | | | | ● | |
+| FastAPI service + auth (bearer) | extra | | | | | | ● | |
+| Parallel tool execution (opt-in) | manifest flag | | | | | | ● | |
+| Chat + in-page approvals (opt-in) | extra | | | | | | | ● |
 
 `●` shipped · `◐` stretch goal
 
@@ -86,6 +87,10 @@ make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b                          # event-log predicates, per-case table
 make eval MODEL=qwen3:8b EXPORT=langfuse          # ...and one Langfuse trace per case
 make eval MODEL=opencode-go/deepseek-v4.1-flash PROFILE=default   # via OmniRoute
+
+# Drive the same agent from a browser: type, watch the tools run, approve a refund
+RIGGING_SERVICE_TOKEN=demo make web MODEL=opencode-go/deepseek-v4.1-flash PROFILE=default
+# http://127.0.0.1:8000 — token "demo"
 ```
 
 `PROFILE=default` (or `harness eval --profile default`) overrides the manifest's
@@ -135,17 +140,38 @@ suite's assertions, not a score invented for the viewer.
 
 ## Web view
 
-A read-only page over the same SQLite event log — no second store, no write
-endpoint, no build step ([ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)).
+The same SQLite event log, rendered in a browser: no second store, no build step.
+Two modes, one page ([ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md),
+[ADR-0023](docs/adr/0023-the-web-ui-can-run-an-agent.md)).
 
 ```bash
 make hello                      # or make demo — anything that writes rigging.db
-make serve                      # http://127.0.0.1:8000
+make serve                      # read-only: http://127.0.0.1:8000
+
+# Chat: type a prompt, watch the tools run, approve or deny a refund
+RIGGING_SERVICE_TOKEN=demo make web MODEL=opencode-go/deepseek-v4.1-flash PROFILE=default
 ```
 
-The left column lists runs; picking one replays its events and then follows it
-live over SSE (`/api/runs/{id}/stream`). Approvals stay in the loop: the page
-cannot launch a run or answer a guardrail, by design.
+The left column lists runs; picking one shows the session's earlier turns and then
+follows the selected run live over SSE (`/api/runs/{id}/stream`). The transcript
+is built from events — user and agent bubbles, one card per tool call with its
+arguments and result, a guardrail line per hook, and a footer with the model
+turns and token counts. `raw events` switches to the unfiltered log.
+
+**Read-only is the default.** Without `--manifest` there is no write route at
+all: no POST, no launch, no approval. That is still the whole of ADR-0018.
+
+**With `--manifest` the page can start a run.** `POST /api/chat` calls the same
+`run_agent` the CLI calls, in a worker thread; the page subscribes to the run's
+stream. Multi-turn history is rebuilt from the log (`session_messages`), so a
+restart loses nothing. A side-effecting tool blocks the loop on `WebApproval`
+until the page answers — the loop writes `approval_requested` and
+`approval_verdict` exactly as it does in the terminal, and still makes the
+decision. There is no second loop, no second store, and no auto-approve.
+
+Chat requires a token even on loopback: any page the browser visits can POST to
+`127.0.0.1:8000`, and the token is the one thing it cannot read. `harness serve`
+refuses `--manifest` without `RIGGING_SERVICE_TOKEN`.
 
 Auth is one bearer token (ADR-0021). Set `RIGGING_SERVICE_TOKEN` (comma-separated
 for rotation) and every `/api/*` route requires it; `GET /` stays public so the
@@ -176,8 +202,10 @@ RIGGING_SERVICE_TOKEN="$(openssl rand -base64 32)" \
 
 `sessionStorage` is readable by any script running on the origin. That is
 accepted here because the page loads no third-party code, escapes every payload
-and can only read; a per-response CSP nonce blocks external script/style and
-framing. It is stated as residual risk, not hidden.
+and, in the default mode, can only read; a per-response CSP nonce blocks external
+script/style and framing. In chat mode the token also guards a write path, and
+the same XSS would let a script start a run — the CSP and the absence of
+third-party script are the controls, stated as residual risk rather than hidden.
 [`docs/threat-model.md`](docs/threat-model.md) has the threat table, controls,
 deployment checklist and the non-claims (no encryption at rest, no per-user
 audit, no token expiry).
@@ -192,13 +220,15 @@ The page's JavaScript is tested in a real browser, not only over HTTP:
 
 ```bash
 make browser-install            # playwright + Chromium (~120 MB, once)
-make test-browser               # loads the page, asserts the run list renders
+make test-browser               # renders the run list; runs a turn and approves it
 ```
 
 That test exists because v0.6.0 shipped a page that answered 200 and rendered
 nothing: a Python `\n` had become a real newline inside the inline JS, so the
 script never parsed. The route tests could not see it; the browser test can. The
-postscript in [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)
+second test drives the write path end to end — types a prompt, clicks approve,
+and asserts the tool result appears. The postscript in
+[ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)
 has the honest version.
 
 ## Decision models: cloud or local
@@ -267,9 +297,10 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`AGENTS.md`](AGENTS.md) — operating instructions for a coding agent working in this repo
 
 - [`docs/architecture.md`](docs/architecture.md) — layers, loop sequence, event schema
-- [`docs/adr/`](docs/adr/) — 22 decisions with the alternatives that were rejected
+- [`docs/adr/`](docs/adr/) — 23 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 - [`docs/threat-model.md`](docs/threat-model.md) — assets, threats, controls, non-claims
+- [`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) — drive the agent from a browser, approve a refund
 - [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 
 ## Manifest schema

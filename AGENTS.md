@@ -11,12 +11,13 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.6.3 released (2026-11-03). The loop,
+Current state: v0.7.0 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
-MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
-bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (188 offline tests plus a browser smoke test; ruff + `mypy --strict`
-clean). All four exit-criteria demos verified live.
+MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, web view with bearer auth
+(read-only, or chat with in-page approvals when `--manifest` is passed),
+subagents and opt-in parallel tool execution are implemented and tested (204
+offline tests plus two browser tests; ruff + `mypy --strict` clean). All four
+exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
 
@@ -45,9 +46,11 @@ clean). All four exit-criteria demos verified live.
 8. **No LLM-as-judge** in guardrails or evals (ADR-0009, ADR-0017).
 9. **No silent feature: the CLI says what is not built.** Unimplemented commands
    print the milestone and exit 2.
-10. **Non-goals stay non-goals** (ADR-0017). Agent memory, MCP serving and
-    write-capable UIs are still out. Subagents (v0.6, ADR-0019) and a read-only
-    web view (v0.5, ADR-0018) are in: extend those, do not reinvent them.
+10. **Non-goals stay non-goals** (ADR-0017). Agent memory and MCP serving are
+    still out. Subagents (v0.6, ADR-0019), the read-only web view (v0.5,
+    ADR-0018) and the opt-in chat write path (v0.7, ADR-0023) are in: extend
+    those, do not reinvent them. The chat path is the only place the service
+    writes, and it does so by calling `run_agent`, never by reimplementing it.
 
 ## Layout
 
@@ -65,7 +68,8 @@ rigging/
   retriever/        fts5 (works), qdrant (v0.3 stub)
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations
-  service/          read-only FastAPI + SSE view of the event log (ADR-0018)
+  service/          FastAPI + SSE view of the event log (ADR-0018); chat.py
+                    adds the opt-in write path and WebApproval (ADR-0023)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   cli.py            harness run|schema|tools|chat|index|eval|calibrate|serve
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
@@ -83,7 +87,7 @@ scripts/bench.py                   models x repeats driver -> results/
 scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file
 results/                           published table + raw runs (evidence, not code)
 tests/                             unit, SSE wire fixtures, loop invariants,
-                                   and the opt-in browser smoke test
+                                   and the opt-in browser tests (read + chat)
 ```
 
 ## Workflow
@@ -186,7 +190,9 @@ guardrails + approval live in the demo, fts5/qdrant retrievers, seeded fixture D
 OTel → Langfuse observability, eval CLI over recorded transcripts (`--replay`),
 MCP consumption. v0.5 shipped the web view and the recorded demo; v0.6
 (2026-11-03) added subagents, the MLflow exporter, service auth and opt-in
-parallel tool execution. Start from the first unticked box above that.
+parallel tool execution. v0.7 (2026-11-03) made the web view drivable — chat and
+in-page approvals behind `--manifest` and a token (ADR-0023). Start from the
+first unticked box above that.
 
 ## Things that will tempt you and are wrong here
 

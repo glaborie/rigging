@@ -1,7 +1,9 @@
 # ADR-0018: The web widget is a read-only view of the event log
 
 **Status:** Accepted (supersedes the "no web UI before the v0.5 stretch" clause of
-ADR-0017; its no-auth clause is superseded by ADR-0021)
+ADR-0017; its no-auth clause is superseded by ADR-0021; its no-write clause is
+superseded by ADR-0023, which keeps every route below unchanged and adds chat
+only when `harness serve --manifest` is passed)
 
 ## Context
 
