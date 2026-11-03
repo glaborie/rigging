@@ -77,6 +77,10 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("--ssl-certfile", default=None,
+                       help="TLS certificate (PEM); with --ssl-keyfile serves https")
+    serve.add_argument("--ssl-keyfile", default=None,
+                       help="TLS private key (PEM)")
 
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
@@ -272,16 +276,30 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if not pathlib.Path(db).exists():
         print(f"no event log at {db} — run an agent first", file=sys.stderr)
         return 2
+    if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
+        print("--ssl-certfile and --ssl-keyfile go together", file=sys.stderr)
+        return 2
+    tls = bool(args.ssl_certfile and args.ssl_keyfile)
     tokens = [t.strip() for t in settings.service_token.split(",") if t.strip()]
     try:
-        check_bind(args.host, tokens)
+        check_bind(args.host, tokens, tls=tls,
+                   allow_plaintext=settings.service_allow_plaintext)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2
-    print(f"rigging runs: http://{args.host}:{args.port}  (read-only, db={db})")
+    scheme = "https" if tls else "http"
+    print(f"rigging runs: {scheme}://{args.host}:{args.port}  (read-only, db={db})")
     print(f"auth: {'bearer token' if tokens else 'none — loopback only (ADR-0021)'}")
-    uvicorn.run(create_app(db, tokens=tokens), host=args.host, port=args.port,
-                log_level="warning")
+    print("rate limit: "
+          + (f"{settings.service_rate_limit}/min per client"
+             if settings.service_rate_limit > 0 else "off"))
+    uvicorn.run(
+        create_app(db, tokens=tokens,
+                   rate_limit_per_minute=settings.service_rate_limit),
+        host=args.host, port=args.port,
+        ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
+        log_level="warning",
+    )
     return 0
 
 

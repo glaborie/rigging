@@ -81,12 +81,16 @@ def test_the_page_renders_the_run_list(tmp_path):
             pytest.skip(f"chromium is not installed: {exc}")
         page = browser.new_page()
         errors: list[str] = []
+        console: list[str] = []
         page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("console", lambda msg: console.append(msg.text))
         try:
             page.goto(base_url, wait_until="domcontentloaded")
             page.wait_for_selector(".run", timeout=10_000)
             assert run_id in page.inner_text("#runs")
             assert "browser smoke" in page.inner_text("#runs")
             assert errors == [], f"the page raised: {errors}"
+            violations = [m for m in console if "Content Security Policy" in m]
+            assert violations == [], f"the CSP blocked the page's own code: {violations}"
         finally:
             browser.close()

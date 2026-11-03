@@ -76,7 +76,7 @@ def test_stream_replays_a_finished_run_then_ends(tmp_path):
     response = _client(tmp_path, log).get(f"/api/runs/{run_id}/stream")
     assert response.headers["content-type"].startswith("text/event-stream")
     frames = [line for line in response.text.splitlines() if line.startswith("data: ")]
-    types = [json.loads(f[len("data: "):]).get("type") for f in frames]
+    types = [json.loads(f[len("data: ") :]).get("type") for f in frames]
     assert "run_started" in types and "run_finished" in types
     assert "event: end" in response.text
 
@@ -123,6 +123,7 @@ def test_missing_database_is_refused(tmp_path):
 
 # ------------------------------------------------------------------- auth (ADR-0021)
 
+
 def test_the_shell_is_public_but_the_data_is_not(tmp_path):
     log, run_id = _finished_run(tmp_path)
     client = TestClient(create_app(log.path, tokens=["secret"]))
@@ -156,7 +157,9 @@ def test_tokens_rotate_by_comma(tmp_path):
     log, _ = _finished_run(tmp_path)
     client = TestClient(create_app(log.path, tokens="old, new"))
     for token in ("old", "new"):
-        assert client.get("/api/runs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        assert (
+            client.get("/api/runs", headers={"Authorization": f"Bearer {token}"}).status_code == 200
+        )
 
 
 def test_no_token_means_no_auth_on_loopback(tmp_path):
@@ -169,5 +172,86 @@ def test_exposing_the_service_without_a_token_is_refused():
 
     with pytest.raises(ValueError, match="RIGGING_SERVICE_TOKEN"):
         check_bind("0.0.0.0", [])
+    # "" is not loopback: uvicorn would bind every interface.
+    with pytest.raises(ValueError, match="RIGGING_SERVICE_TOKEN"):
+        check_bind("", [])
     check_bind("127.0.0.1", [])
-    check_bind("0.0.0.0", ["secret"])
+    check_bind("127.0.0.2", [])
+    check_bind("::1", [])
+    check_bind("localhost", [])
+
+
+def test_a_token_over_plain_http_is_refused_off_loopback():
+    """A bearer token on the wire is only safe behind TLS (docs/threat-model.md)."""
+    from rigging.service import check_bind
+
+    with pytest.raises(ValueError, match="plain HTTP"):
+        check_bind("0.0.0.0", ["secret"])
+    # The two documented escapes: TLS on the socket, or an explicit opt-in when
+    # the network already protects the link.
+    check_bind("0.0.0.0", ["secret"], tls=True)
+    check_bind("0.0.0.0", ["secret"], allow_plaintext=True)
+    # Loopback needs neither.
+    check_bind("127.0.0.1", ["secret"])
+
+
+# ------------------------------------------------------- headers and rate limit
+
+
+def test_security_headers_and_a_matching_csp_nonce(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    response = _client(tmp_path, log).get("/")
+    headers = response.headers
+
+    assert headers["x-content-type-options"] == "nosniff"
+    assert headers["x-frame-options"] == "DENY"
+    assert headers["referrer-policy"] == "no-referrer"
+    assert headers["cache-control"] == "no-store"
+    csp = headers["content-security-policy"]
+    assert "default-src 'none'" in csp and "frame-ancestors 'none'" in csp
+    assert "connect-src 'self'" in csp
+
+    # The nonce in the policy must be the one on the inline script and style,
+    # or the browser refuses to run the page.
+    nonce = csp.split("script-src 'nonce-", 1)[1].split("'", 1)[0]
+    body = response.text
+    assert f'<script nonce="{nonce}">' in body
+    assert f'<style nonce="{nonce}">' in body
+    assert "__CSP_NONCE__" not in body
+
+
+def test_the_nonce_changes_per_response(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    client = _client(tmp_path, log)
+    first = client.get("/").headers["content-security-policy"]
+    second = client.get("/").headers["content-security-policy"]
+    assert first != second
+
+
+def test_api_requests_are_rate_limited_per_client(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, rate_limit_per_minute=2))
+
+    assert client.get("/api/runs").status_code == 200
+    assert client.get("/api/runs").status_code == 200
+    limited = client.get("/api/runs")
+    assert limited.status_code == 429
+    assert 1 <= int(limited.headers["retry-after"]) <= 60
+    # The shell stays reachable: the page can explain the 429 instead of a blank tab.
+    assert client.get("/").status_code == 200
+
+
+def test_the_limit_is_checked_before_the_token(tmp_path):
+    """A token-guessing script spends its own budget, not free comparisons."""
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens=["secret"], rate_limit_per_minute=2))
+
+    assert client.get("/api/runs").status_code == 401
+    assert client.get("/api/runs").status_code == 401
+    assert client.get("/api/runs").status_code == 429
+
+
+def test_rate_limiting_can_be_disabled(tmp_path):
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, rate_limit_per_minute=0))
+    assert all(client.get("/api/runs").status_code == 200 for _ in range(10))

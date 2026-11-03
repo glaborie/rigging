@@ -56,6 +56,15 @@ class Settings(BaseSettings):
     # web view auth (ADR-0021): comma-separated to allow rotation. Empty means no
     # auth, which `harness serve` only allows on a loopback bind.
     service_token: str = Field(default="", validation_alias="RIGGING_SERVICE_TOKEN")
+    # Per-client request cap for /api/*; 0 disables it. A backstop, not a
+    # replacement for the proxy's limiter (docs/threat-model.md).
+    service_rate_limit: int = Field(default=240,
+                                    validation_alias="RIGGING_SERVICE_RATE_LIMIT")
+    # A bearer token over plain HTTP is refused on a non-loopback bind unless the
+    # operator says the network already protects the link.
+    service_allow_plaintext: bool = Field(
+        default=False, validation_alias="RIGGING_SERVICE_ALLOW_PLAINTEXT"
+    )
 
     # subagents (ADR-0019): how deep spawn_* tools may nest. Enforced at runtime,
     # not per manifest, so a manifest cannot promote itself.

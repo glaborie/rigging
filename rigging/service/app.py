@@ -8,7 +8,10 @@ Needs `rigging[service]`; `harness serve` prints the install hint without it.
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
+import math
+import secrets
 import sqlite3
 import time
 from collections.abc import Iterator, Sequence
@@ -17,7 +20,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
+
+from rigging.service.ratelimit import RateLimiter
 
 #: How often the SSE generator re-reads the log while a run is in flight.
 POLL_INTERVAL_S = 0.3
@@ -110,16 +115,43 @@ def _tail(db: str | Path, run_id: str, idle_seconds: float, max_seconds: float) 
         time.sleep(POLL_INTERVAL_S)
 
 
-LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", ""}
+def _is_loopback(host: str) -> bool:
+    """True for `localhost` and any loopback address, including the IPv6 forms.
+
+    An empty host is *not* loopback: uvicorn binds it to every interface.
+    """
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
 
 
-def check_bind(host: str, tokens: Sequence[str]) -> None:
-    """Refuse to expose the service without a token (ADR-0021)."""
-    if tokens or host in LOOPBACK_HOSTS:
+def check_bind(
+    host: str, tokens: Sequence[str], *, tls: bool = False, allow_plaintext: bool = False
+) -> None:
+    """Refuse an unsafe exposure (ADR-0021).
+
+    A loopback bind is always fine. Anything else needs a token *and* either TLS
+    on the socket or an explicit opt-in, because a bearer token over plain HTTP
+    crosses the network in clear text.
+    """
+    if _is_loopback(host):
+        return
+    if not tokens:
+        raise ValueError(
+            f"refusing to bind {host!r} without RIGGING_SERVICE_TOKEN: the web view "
+            "serves full run transcripts. Set a token, or bind 127.0.0.1."
+        )
+    if tls or allow_plaintext:
         return
     raise ValueError(
-        f"refusing to bind {host!r} without RIGGING_SERVICE_TOKEN: the web view "
-        "serves full run transcripts. Set a token, or bind 127.0.0.1."
+        f"refusing to bind {host!r} with a bearer token over plain HTTP: the token "
+        "would cross the network in clear text. Terminate TLS in a reverse proxy "
+        "and bind 127.0.0.1 (docs/threat-model.md), pass --ssl-certfile and "
+        "--ssl-keyfile, or set RIGGING_SERVICE_ALLOW_PLAINTEXT=1 when the network "
+        "already protects the link."
     )
 
 
@@ -141,47 +173,105 @@ def _auth_dependency(tokens: tuple[str, ...]) -> Any:
     return require_bearer
 
 
-def create_app(db: str | Path, *, idle_seconds: float = 20.0,
-               max_seconds: float = 600.0,
-               tokens: Sequence[str] | str | None = None) -> FastAPI:
+def _rate_limit_dependency(limiter: RateLimiter) -> Any:
+    """Count every `/api/*` request per client IP, before the token is checked.
+
+    Before auth on purpose: a script guessing tokens should hit 429 on its own
+    budget, not get unlimited free comparisons against `hmac.compare_digest`.
+    """
+
+    def enforce(request: Request) -> None:
+        key = request.client.host if request.client else "unknown"
+        allowed, retry_after = limiter.allow(key)
+        if not allowed:
+            raise HTTPException(
+                status_code=429,
+                detail="too many requests",
+                headers={"Retry-After": str(max(1, math.ceil(retry_after)))},
+            )
+
+    return enforce
+
+
+def _csp(nonce: str) -> str:
+    """Only the page's own inline script and style may run; no framing, no forms."""
+    return (
+        "default-src 'none'; "
+        f"script-src 'nonce-{nonce}'; "
+        f"style-src 'nonce-{nonce}'; "
+        "connect-src 'self'; "
+        "base-uri 'none'; "
+        "form-action 'none'; "
+        "frame-ancestors 'none'"
+    )
+
+
+def create_app(
+    db: str | Path,
+    *,
+    idle_seconds: float = 20.0,
+    max_seconds: float = 600.0,
+    tokens: Sequence[str] | str | None = None,
+    rate_limit_per_minute: int = 240,
+) -> FastAPI:
     """Build the app around one SQLite event log.
 
     `tokens` guards every `/api/*` route; the HTML shell stays public so the page
     can ask for the token (ADR-0021). Empty tokens means no auth — only valid for
-    a loopback bind, which `harness serve` enforces.
+    a loopback bind, which `harness serve` enforces. `rate_limit_per_minute`
+    caps requests per client IP per minute; `0` disables it.
     """
     if not Path(db).exists():
         raise FileNotFoundError(f"no event log at {db} — run an agent first")
     if isinstance(tokens, str):
         tokens = [t.strip() for t in tokens.split(",") if t.strip()]
     token_tuple = tuple(tokens or ())
-    auth = [Depends(_auth_dependency(token_tuple))]
+    limiter = RateLimiter(rate_limit_per_minute)
+    guard = [Depends(_rate_limit_dependency(limiter)), Depends(_auth_dependency(token_tuple))]
 
     app = FastAPI(title="rigging", docs_url=None, redoc_url=None, openapi_url=None)
 
-    @app.get("/", response_class=HTMLResponse)
-    def index() -> str:
-        return INDEX_HTML
+    @app.middleware("http")
+    async def security_headers(request: Request, call_next: Any) -> Response:
+        nonce = secrets.token_urlsafe(16)
+        request.state.csp_nonce = nonce
+        response: Response = await call_next(request)
+        response.headers["Content-Security-Policy"] = _csp(nonce)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        return response
 
-    @app.get("/api/runs", dependencies=auth)
+    @app.get("/", response_class=HTMLResponse)
+    def index(request: Request) -> str:
+        nonce = getattr(request.state, "csp_nonce", "")
+        return INDEX_HTML.replace("__CSP_NONCE__", nonce)
+
+    @app.get("/api/runs", dependencies=guard)
     def list_runs(limit: int = 20) -> dict[str, Any]:
         return {"runs": runs(db, max(1, min(limit, 100)))}
 
-    @app.get("/api/runs/{run_id}", dependencies=auth)
+    @app.get("/api/runs/{run_id}", dependencies=guard)
     def get_run(run_id: str) -> dict[str, Any]:
         row = run(db, run_id)
         if row is None:
             raise HTTPException(status_code=404, detail="no such run")
         return {"run": row, "events": events(db, run_id)}
 
-    @app.get("/api/runs/{run_id}/stream", dependencies=auth)
-    def stream(run_id: str, idle: float | None = None,
-               timeout: float | None = None) -> StreamingResponse:
+    @app.get("/api/runs/{run_id}/stream", dependencies=guard)
+    def stream(
+        run_id: str, idle: float | None = None, timeout: float | None = None
+    ) -> StreamingResponse:
         if run(db, run_id) is None:
             raise HTTPException(status_code=404, detail="no such run")
         return StreamingResponse(
-            _tail(db, run_id, idle if idle is not None else idle_seconds,
-                  timeout if timeout is not None else max_seconds),
+            _tail(
+                db,
+                run_id,
+                idle if idle is not None else idle_seconds,
+                timeout if timeout is not None else max_seconds,
+            ),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
         )
@@ -194,7 +284,7 @@ INDEX_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>rigging — runs</title>
-<style>
+<style nonce="__CSP_NONCE__">
   :root {
     --bg: #101418; --panel: #171c22; --line: #232b34; --ink: #d7dee7;
     --dim: #7b8794; --accent: #7dd3a7; --warn: #f0b46b; --bad: #ef7f7f;
@@ -233,7 +323,7 @@ INDEX_HTML = r"""<!doctype html>
     <div id="log"><p class="empty">No run selected.</p></div>
   </section>
 </main>
-<script>
+<script nonce="__CSP_NONCE__">
 const runsEl = document.getElementById('runs');
 const logEl = document.getElementById('log');
 const metaEl = document.getElementById('meta');
