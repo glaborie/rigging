@@ -225,6 +225,15 @@ uv run python scripts/bench.py ... --timeout 1800
 |---|---|---|---|---|
 | `opencode-go/deepseek-v4.1-flash` (OmniRoute) | 40/40 (100%, 91%-100%) | 0 | 8.8s | 40 tagged `bench` |
 
+That run predates the six cases added in `eval: six more b2b cases` — it is the
+8-case suite. The 14-case suite was validated separately: 65/70 on the first
+5-repeat pass, and after correcting two assertions that measured the model's
+choice rather than the invariant (`commitment-refused` no longer requires a
+handoff; `restocking-fee-quoted` no longer requires the refund to execute), the
+two adjusted cases ran 10/10 and every new case ran 5/5. A 14-case published
+table costs 70 model calls; rerun `scripts/bench.py` with `--repeats 2` (28
+calls) when that is acceptable.
+
 Earlier runs kept as evidence: `opencode-go/glm-5.2` (crashed — tool-call
 format). A Gemini run was not kept: its connection OAuth expired mid-run (2 of 5
 reps crashed with `authentication expired`) and Gemini is no longer used here.
