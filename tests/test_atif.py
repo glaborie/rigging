@@ -136,6 +136,9 @@ def test_harbor_layout_matches_what_harbor_view_reads(tmp_path) -> None:
     assert job_result["n_total_trials"] == 1
     assert job_result["stats"]["n_completed_trials"] == 1
 
+    readme = (job / "README.md").read_text()
+    assert "harbor view" in readme and "s_test" in readme
+
 
 def test_a_second_session_joins_the_same_job_without_losing_the_first(tmp_path) -> None:
     mod = _mod()
