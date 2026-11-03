@@ -85,7 +85,12 @@ make seed                                        # deterministic demo.db (seed=7
 make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b                          # event-log predicates, per-case table
 make eval MODEL=qwen3:8b EXPORT=langfuse          # ...and one Langfuse trace per case
+make eval MODEL=openrouter/google/gemini-2.5-flash PROFILE=default   # via OmniRoute
 ```
+
+`PROFILE=default` (or `harness eval --profile default`) overrides the manifest's
+`credential_profile`, so a hosted model goes to `RIGGING_BASE_URL` (OmniRoute)
+instead of the local Ollama profile the demo pins.
 
 No API key is required for either path. The gateway is OpenAI-compatible HTTP,
 so pointing `RIGGING_BASE_URL` at OmniRoute, vLLM, LM Studio or Ollama's own

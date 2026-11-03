@@ -161,13 +161,21 @@ def _with_exporters(spec: AgentSpec, exporters: list[str] | None) -> AgentSpec:
     })
 
 
+def _with_profile(spec: AgentSpec, profile: str | None) -> AgentSpec:
+    """`--profile` picks the gateway, e.g. `default` for $RIGGING_BASE_URL (OmniRoute)."""
+    if profile is None:
+        return spec
+    return spec.model_copy(update={"credential_profile": profile})
+
+
 def run_suite(path: str | Path, *, db: str | Path | None = None, model: str | None = None,
-              only: list[str] | None = None,
-              exporters: list[str] | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
+              only: list[str] | None = None, exporters: list[str] | None = None,
+              profile: str | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
     suite = _load_suite(path)
     spec = load_manifest(str(Path(path).parent / suite["manifest"]))
     if model:
         spec = spec.model_copy(update={"model": model})
+    spec = _with_profile(spec, profile)
     spec = _with_exporters(spec, exporters)
     db_path = Path(db or "runs/eval.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)

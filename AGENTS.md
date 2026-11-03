@@ -15,7 +15,7 @@ Current state: v0.6.3 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (157 offline tests plus a browser smoke test; ruff + `mypy --strict`
+tested (158 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)
@@ -134,7 +134,12 @@ make observability              # checks LANGFUSE_* and the [langfuse] extra —
 make trace                      # runs the observability example, then reads the spans back
 make trace MODEL=qwen3:8b       # ...against host Ollama; no gateway container needed
 make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
+make eval PROFILE=default MODEL=openrouter/...   # hosted model via OmniRoute, not Ollama
 ```
+
+`PROFILE=default` (or `harness eval --profile default`) overrides the manifest's
+`credential_profile`: the demo pins Ollama for zero-credential runs, so a hosted
+model id would otherwise be sent to `localhost:11434` and 404.
 
 The exporter needs the `[langfuse]` extra, which `make install` does not pull:
 `uv sync --extra dev --extra langfuse` (add `--extra service --extra mcp` if you

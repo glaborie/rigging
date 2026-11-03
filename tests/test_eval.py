@@ -19,3 +19,14 @@ def test_export_override_replaces_the_manifest_list():
     assert spec.observability.exporters == [], "the input spec is not mutated"
 
     assert _with_exporters(spec, None).observability.exporters == []
+
+
+def test_profile_override_picks_the_gateway():
+    from rigging.eval import _with_profile
+
+    spec = load_manifest(str(ROOT / "examples/b2b-support/agent.yaml"))
+    assert spec.credential_profile == "ollama", "the demo manifest pins Ollama"
+
+    assert _with_profile(spec, "default").credential_profile == "default"
+    assert spec.credential_profile == "ollama", "the input spec is not mutated"
+    assert _with_profile(spec, None).credential_profile == "ollama"

@@ -53,6 +53,8 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("suite", help="path to suite.yaml")
     ev.add_argument("--db", default=None)
     ev.add_argument("--model", default=None, help="override the manifest model for the suite")
+    ev.add_argument("--profile", default=None,
+                    help="override the manifest credential_profile (e.g. default for $RIGGING_BASE_URL)")
     ev.add_argument("--only", action="append", default=None, help="run only these case ids")
     ev.add_argument("--export", action="append", default=None,
                     help="override the manifest exporters (repeatable, e.g. --export langfuse)")
@@ -143,7 +145,7 @@ def cmd_eval(args: argparse.Namespace) -> int:
     from rigging.eval import render, run_suite
 
     results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only,
-                               exporters=args.export)
+                               exporters=args.export, profile=args.profile)
     if args.json:
         print(json.dumps({"suite": suite.get("name"), "results": [r.__dict__ for r in results]},
                          indent=2, default=str))

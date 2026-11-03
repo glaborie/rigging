@@ -132,8 +132,8 @@ demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make see
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(filter 1,$(APPROVE)),--yes,)
 
-eval: ## run the b2b-support eval suite over the event log: make eval SUITE=... EXPORT=langfuse
-	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),)
+eval: ## run the b2b-support eval suite over the event log: make eval SUITE=... EXPORT=langfuse PROFILE=default
+	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),) $(if $(PROFILE),--profile $(PROFILE),)
 
 up: gateway ## alias for `make gateway`
 
