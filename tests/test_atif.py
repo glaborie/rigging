@@ -190,3 +190,17 @@ def test_verdicts_are_read_from_the_event_log_by_run_id(tmp_path) -> None:
     verdicts = mod.load_verdicts(tmp_path / "eval.db")
     assert verdicts["r_1"]["passed"] is False
     assert mod.load_verdicts(tmp_path / "missing.db") == {}
+
+
+def test_text_and_tool_calls_in_one_generation() -> None:
+    """rigging records a text+calls turn as {"content", "tool_calls"}."""
+    mod = _mod()
+    obs = _observations()
+    obs[1]["output"] = json.dumps({
+        "content": "Let me check that order.",
+        "tool_calls": [{"name": "lookup_order", "arguments": {"order_id": "ORD-1"}}],
+    })
+    steps = mod.build_trajectory("s_test", {"id": "tr_1"}, obs)["steps"]
+    assert steps[1]["message"] == "Let me check that order."
+    assert steps[1]["tool_calls"][0]["function_name"] == "lookup_order"
+    assert steps[2]["observation"]["results"][0]["source_call_id"] == steps[1]["tool_calls"][0]["tool_call_id"]

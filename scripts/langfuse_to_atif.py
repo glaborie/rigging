@@ -153,14 +153,32 @@ def _system_prompt(observations: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def _output_parts(payload: Any) -> tuple[Any, list[dict[str, Any]]]:
+    """Split a generation output into (text, tool calls).
+
+    rigging records text and calls in one turn as
+    `{"content": "...", "tool_calls": [...]}`; a turn with only calls is the bare
+    list, and a plain answer is a string.
+    """
+    payload = _decode(payload)
+    if isinstance(payload, dict):
+        return payload.get("content"), [p for p in payload.get("tool_calls") or []
+                                        if isinstance(p, dict)]
+    if isinstance(payload, list):
+        if all(isinstance(p, dict) and p.get("name") for p in payload):
+            return None, payload
+        text = "".join(p.get("text", "") for p in payload
+                       if isinstance(p, dict) and p.get("type") == "text")
+        return text or None, [p for p in payload if isinstance(p, dict) and p.get("name")]
+    return payload, []
+
+
 def _tool_calls(obs: dict[str, Any], step_id: int) -> list[dict[str, Any]]:
-    """Promote a generation's `[{"name","arguments"}]` output into ATIF calls."""
-    payload = _decode(obs.get("output"))
-    if not isinstance(payload, list):
-        return []
+    """Promote a generation's tool calls into ATIF calls, ids included."""
+    _, parts = _output_parts(obs.get("output"))
     calls = []
-    for index, part in enumerate(payload, start=1):
-        if not isinstance(part, dict) or not part.get("name"):
+    for index, part in enumerate(parts, start=1):
+        if not part.get("name"):
             continue
         calls.append({
             "tool_call_id": f"call_{step_id}_{index}",
@@ -218,8 +236,8 @@ def build_trajectory(session_id: str, trace: dict[str, Any],
             flush_observations()
             step_id = len(steps) + 1
             calls = _tool_calls(obs, step_id)
-            payload = obs.get("output")
-            message = "" if calls else _text(payload)
+            content, _ = _output_parts(obs.get("output"))
+            message = _text(content) if content else ""
             metrics = {
                 "prompt_tokens": _int(_attr(obs, "gen_ai.usage.input_tokens")),
                 "completion_tokens": _int(_attr(obs, "gen_ai.usage.output_tokens")),
