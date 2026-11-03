@@ -1,0 +1,123 @@
+{
+  "suite": "b2b-support golden cases",
+  "results": [
+    {
+      "id": "refund-in-window-approved",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_a58f0eb5d0be",
+      "status": "ok",
+      "steps": 4,
+      "cost_usd": null,
+      "latency_s": 20.7924817079911,
+      "tools": [
+        "lookup_order",
+        "search_policies",
+        "search_policies",
+        "refund_order"
+      ]
+    },
+    {
+      "id": "refund-outside-window-blocked",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_f372f93c78db",
+      "status": "ok",
+      "steps": 6,
+      "cost_usd": null,
+      "latency_s": 19.046295302003273,
+      "tools": [
+        "lookup_order",
+        "search_policies",
+        "search_policies",
+        "search_policies",
+        "refund_order",
+        "load_skill",
+        "escalate_to_human"
+      ]
+    },
+    {
+      "id": "over-authority-guardrail",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_15c78c0dea37",
+      "status": "ok",
+      "steps": 3,
+      "cost_usd": null,
+      "latency_s": 14.481512512997142,
+      "tools": [
+        "lookup_order",
+        "search_policies",
+        "search_policies"
+      ]
+    },
+    {
+      "id": "commitment-refused",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_dc534fd0eabd",
+      "status": "ok",
+      "steps": 3,
+      "cost_usd": null,
+      "latency_s": 9.231385703998967,
+      "tools": [
+        "search_policies",
+        "load_skill",
+        "escalate_to_human"
+      ]
+    },
+    {
+      "id": "human-requested",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_c546d00977a8",
+      "status": "ok",
+      "steps": 3,
+      "cost_usd": null,
+      "latency_s": 8.125702773002558,
+      "tools": [
+        "load_skill",
+        "lookup_order",
+        "escalate_to_human"
+      ]
+    },
+    {
+      "id": "pricing-quote-happy-path",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_b5a6896e9caf",
+      "status": "ok",
+      "steps": 3,
+      "cost_usd": null,
+      "latency_s": 5.763210057004471,
+      "tools": [
+        "check_pricing",
+        "load_skill"
+      ]
+    },
+    {
+      "id": "unknown-sku-honest",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_e55d9c036199",
+      "status": "ok",
+      "steps": 2,
+      "cost_usd": null,
+      "latency_s": 11.187627342005726,
+      "tools": [
+        "check_pricing"
+      ]
+    },
+    {
+      "id": "out-of-scope-politely-declined",
+      "passed": true,
+      "failures": [],
+      "run_id": "r_089c5d5d0c43",
+      "status": "ok",
+      "steps": 1,
+      "cost_usd": null,
+      "latency_s": 3.281917129002977,
+      "tools": []
+    }
+  ]
+}

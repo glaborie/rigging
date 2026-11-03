@@ -43,4 +43,4 @@ Cost: one more environment variable, and an attribute that is invisible until
 you open the trace. It is deliberately not a manifest field — tags describe the
 experiment, not the agent, so a manifest must not hard-code them. Tags are
 labels, not content: `capture_content: false` still sends them. Verified on
-cloud.langfuse.com — trace tags `["bench","gemini/gemini-3.7-flash","rep-1"]`.
+cloud.langfuse.com — trace tags `["bench","opencode-go/deepseek-v4.1-flash","rep-1"]`.

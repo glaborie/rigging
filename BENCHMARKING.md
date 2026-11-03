@@ -8,14 +8,14 @@ path and the model id — plus the credential profile.
 
 ```bash
 RIGGING_MAX_RETRIES=6 uv run python scripts/bench.py examples/b2b-support/eval.yaml \
-  --models "gemini/gemini-3.7-flash" \
+  --models "opencode-go/deepseek-v4.1-flash" \
   --repeats 5 \
   --cmd "uv run harness eval {suite} --model {model} --profile default"
 ```
 
-That command was verified on 2026-11-03: 8/8 task cases, 0 crashed runs, and one
-Langfuse trace per case tagged `bench,<model>,rep-<n>` (traces are on by default;
-see [Traces in Langfuse](#traces-in-langfuse)).
+That command was verified on 2026-11-03: 40/40 cases over 5 repeats, 0 crashed
+runs, and 40 Langfuse traces tagged `bench,<model>,rep-<n>` (traces are on by
+default; see [Traces in Langfuse](#traces-in-langfuse)).
 
 `RIGGING_MAX_RETRIES` is the client's retry budget for 429/5xx (default 3). It is
 honoured by `harness run` and `harness eval`; it does not make a 503 with every
@@ -47,21 +47,22 @@ sends that string verbatim as the `model` field of the OpenAI-compatible
 request. The gateway is chosen by the credential profile, not by the model
 string.
 
-So `omniroute:gemini/gemini-3.7-flash` is not "the OmniRoute gateway" — it is a
-model id that OmniRoute parses as provider `omniroute:gemini`:
+So `omniroute:opencode-go/deepseek-v4.1-flash` is not "the OmniRoute gateway" —
+it is a model id that OmniRoute parses as provider `omniroute:opencode-go`:
 
 ```
-No active credentials for provider: omniroute:gemini.  (provider_not_configured)
+No active credentials for provider: omniroute:opencode-go.  (provider_not_configured)
 ```
 
 The correct id is `<OmniRoute connection>/<model>`:
 
 | Want | `--models` value |
 |---|---|
-| Gemini via the Gemini AI Studio connection | `gemini/gemini-3.7-flash` |
-| Gemini via OpenRouter | `openrouter/google/gemini-3.5-flash` |
-| DeepSeek via OpenCode Go | `opencode-go/deepseek-v4.1-flash` |
+| DeepSeek via the OpenCode Go connection | `opencode-go/deepseek-v4.1-flash` |
 | A local Ollama model, no gateway | `qwen3:8b` |
+
+Connection ids are whatever the dashboard shows — `omniroute providers list` is
+the source of truth, not this table.
 
 List the connection ids before guessing:
 
@@ -74,10 +75,10 @@ decoration:
 
 | Message | Cause |
 |---|---|
-| `model 'gemini-3.7-flash' not found` (404) | bare model id; OmniRoute needs `<connection>/<model>` |
-| `model 'gemini-3.7' not found` (404) | combo name used as a model id; combos need `auto/<combo>` |
+| `Unable to determine provider for model 'X'` (400) | no connection called `X`; use `<connection>/<model>` |
+| `model 'X' not found` (404) | the connection exists but does not serve that model |
 | `No eligible providers for this request` (503) | the routed providers are all in cooldown, or a static provider pool is shadowing the dashboard connections |
-| `No active credentials for provider: X` (401) | that connection has no key, or is not the connection you meant |
+| `No active credentials for provider: X` (401) | that connection has no key, or its auth expired |
 
 ### 3. `--profile default` must be in `--cmd`
 
@@ -116,7 +117,7 @@ Every rep runs with `--export langfuse`, and `bench.py` tags the trace with
 8-case b2b suite is 40 traces — filter by tag in Langfuse, not by name.
 
 ```
-tags: ["bench", "gemini/gemini-3.7-flash", "rep-1"]
+tags: ["bench", "opencode-go/deepseek-v4.1-flash", "rep-1"]
 ```
 
 Tags come from `RIGGING_TRACE_TAGS`, which `bench.py` sets on each subprocess;
@@ -141,7 +142,7 @@ so this works without the driver appending a second exporter:
 
 ```bash
 uv run python scripts/bench.py examples/b2b-support/eval.yaml \
-  --models "gemini/gemini-3.7-flash" --repeats 5 \
+  --models "opencode-go/deepseek-v4.1-flash" --repeats 5 \
   --cmd "uv run harness eval {suite} --model {model} --profile default --export mlflow"
 ```
 
@@ -154,8 +155,9 @@ Three files are written to `--out`:
 
 - `raw/<model>-<rep>.txt` — the run's stdout, plus a `--- stderr ---` section
   when the run wrote anything there. This is the only place a crash explains
-  itself. The model id is sanitised into the filename: `gemini/gemini-3.7-flash`
-  becomes `gemini_gemini-3.7-flash`, `openrouter:foo/bar` becomes
+  itself. The model id is sanitised into the filename:
+  `opencode-go/deepseek-v4.1-flash` becomes
+  `opencode-go_deepseek-v4.1-flash`, `openrouter:foo/bar` becomes
   `openrouter_foo_bar`.
 - `summary.json` — per-model rates, medians and crashed-run counts.
 - `table.md` — the published table.
@@ -183,8 +185,8 @@ Columns:
 
   Without `--json` the driver scrapes the human table, which carries pass/fail
   only, and every metric column reads `n/a`. Cost stays `n/a` for gateways that
-  report no price — OmniRoute returns `-` for Gemini, so there is nothing to
-  average.
+  report no price — OmniRoute returns `-` when it has no price for the model, so
+  there is nothing to average.
 - **Flaky cases** — cases that both passed and failed across repeats. Any entry
   here is a finding, not noise to be averaged away.
 
@@ -194,37 +196,35 @@ Columns:
 
 ```bash
 uv run python scripts/bench.py examples/b2b-support/eval.yaml \
-  --models "gemini/gemini-3.7-flash" --repeats 1 \
+  --models "opencode-go/deepseek-v4.1-flash" --repeats 1 \
   --cmd "uv run harness eval {suite} --model {model} --profile default" \
   --out /tmp/bench-check
 ```
 
 The committed `results/` should hold runs that completed. Failed runs are worth
-keeping when they document a real failure mode (the `opencode-go` crash and the
-retired `gemini-2.5-flash` 404s are kept for that reason), not when they are a
-typo in the command.
+keeping when they document a real failure mode (the `opencode-go/glm-5.2` crash
+and the retired-model 404s are kept for that reason), not when they are a typo
+in the command.
 
 ## Slow and flaky providers
 
-Gemini through OmniRoute takes 5-85s per case depending on how many tool steps
-the model needs, so 5 repeats of an 8-case suite is several minutes. Two knobs:
+A hosted model through OmniRoute takes anywhere from a few seconds to a minute
+per case depending on how many tool steps it needs, so 5 repeats of an 8-case
+suite is several minutes. `--timeout` must exceed the slowest single run,
+otherwise a slow case is recorded as a crash:
 
 ```bash
-RIGGING_MAX_RETRIES=6 uv run python scripts/bench.py ... --timeout 1800
+uv run python scripts/bench.py ... --timeout 1800
 ```
-
-`RIGGING_MAX_RETRIES` is the client's retry budget for 429/5xx (default 3). It is
-honoured by `harness run` and `harness eval`; it does not make a 503 with every
-provider in cooldown succeed, it only rides out a short one. `--timeout` must
-exceed the slowest single run, otherwise a slow case is recorded as a crash.
 
 ## Current results
 
 `results/table.md` is the published table. As of v0.6.3:
 
-| Model | Task success | Crashed runs |
-|---|---|---|
-| `gemini/gemini-3.7-flash` (OmniRoute) | 8/8 (100%) | 0 |
+| Model | Task success | Crashed runs | Median latency | Traces |
+|---|---|---|---|---|
+| `opencode-go/deepseek-v4.1-flash` (OmniRoute) | 40/40 (100%, 91%-100%) | 0 | 8.8s | 40 tagged `bench` |
 
-Earlier runs, kept as evidence: `opencode-go/glm-5.2` (crashed — tool-call
-format), `openrouter/google/gemini-2.5-flash` (404, model retired upstream).
+Earlier runs kept as evidence: `opencode-go/glm-5.2` (crashed — tool-call
+format). A Gemini run was not kept: its connection OAuth expired mid-run (2 of 5
+reps crashed with `authentication expired`) and Gemini is no longer used here.

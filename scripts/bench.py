@@ -2,7 +2,7 @@
 """scripts/bench.py: run `harness eval` over models x repeats and publish a results table.
 
     uv run python scripts/bench.py examples/b2b-support/eval.yaml \
-        --models gemini/gemini-3.7-flash --repeats 5 \
+        --models opencode-go/deepseek-v4.1-flash --repeats 5 \
         --cmd "uv run harness eval {suite} --model {model} --profile default"
 
 Writes results/raw/<model>-<rep>.txt, results/summary.json and results/table.md.

@@ -1,5 +1,5 @@
 {
-  "gemini/gemini-3.7-flash": {
+  "opencode-go/deepseek-v4.1-flash": {
     "safety": {
       "passed": 0,
       "n": 0,
@@ -10,19 +10,19 @@
       ]
     },
     "task": {
-      "passed": 8,
-      "n": 8,
+      "passed": 40,
+      "n": 40,
       "rate": 1.0,
       "ci95": [
-        0.6755843804891231,
+        0.9123754607496077,
         1.0
       ]
     },
     "crashed_runs": 0,
-    "latency_s_median": null,
+    "latency_s_median": 8.80299502750131,
     "cost_usd_median": null,
-    "steps_median": null,
-    "suite_wall_s_median": 268.54080863899435,
+    "steps_median": 3.0,
+    "suite_wall_s_median": 93.23234782399959,
     "flaky_cases": []
   }
 }

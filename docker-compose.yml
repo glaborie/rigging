@@ -35,7 +35,8 @@ services:
       #
       # The static self-hosted pool is disabled. With it enabled the router only
       # considered freellm/ollama, so a model on a dashboard connection
-      # (openrouter/gemini) fell back to those two and returned 503 "no eligible
+      # (openrouter, or any OAuth provider) fell back to those two and returned
+      # 503 "no eligible
       # providers": freellm has no key (401) and the harness uses local Ollama
       # directly, not through OmniRoute. Dashboard connections route now.
       # OMNIROUTE_SELF_HOSTED_PROVIDERS: |

@@ -336,7 +336,7 @@ def test_bench_tags_reach_the_root_span(tmp_path, monkeypatch):
 
     exporter = RecordingExporter()
     _patched_exporters(monkeypatch, exporter)
-    monkeypatch.setattr(loop.settings, "trace_tags", "bench,gemini/gemini-3.7-flash,rep-2")
+    monkeypatch.setattr(loop.settings, "trace_tags", "bench,opencode-go/deepseek-v4.1-flash,rep-2")
     spec = _spec(tmp_path, observability={"exporters": ["console"]})
 
     run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
@@ -344,7 +344,7 @@ def test_bench_tags_reach_the_root_span(tmp_path, monkeypatch):
 
     name, attributes = exporter.spans[0]
     assert name == "invoke_agent"
-    assert attributes["langfuse.trace.tags"] == ["bench", "gemini/gemini-3.7-flash", "rep-2"]
+    assert attributes["langfuse.trace.tags"] == ["bench", "opencode-go/deepseek-v4.1-flash", "rep-2"]
 
 
 def test_no_tag_attribute_when_the_variable_is_unset(tmp_path, monkeypatch):

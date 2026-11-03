@@ -52,9 +52,9 @@ def test_unparsable_output_is_empty_so_the_run_counts_as_a_crash() -> None:
 def test_eval_runs_export_langfuse_by_default() -> None:
     """A benchmark without traces cannot answer 'which model did that?'."""
     cmd = _bench().build_cmd("uv run harness eval {suite} --model {model}",
-                             "s.yaml", "gemini/gemini-3.7-flash", ["langfuse"])
+                             "s.yaml", "opencode-go/deepseek-v4.1-flash", ["langfuse"])
     assert cmd[-2:] == ["--export", "langfuse"]
-    assert "gemini/gemini-3.7-flash" in cmd
+    assert "opencode-go/deepseek-v4.1-flash" in cmd
 
 
 def test_an_explicit_export_in_the_template_is_not_overridden() -> None:
@@ -67,5 +67,5 @@ def test_an_explicit_export_in_the_template_is_not_overridden() -> None:
 
 def test_each_rep_is_tagged_with_bench_model_and_pass() -> None:
     bench = _bench()
-    assert bench.run_tags("gemini/gemini-3.7-flash", 0) == "bench,gemini/gemini-3.7-flash,rep-1"
+    assert bench.run_tags("opencode-go/deepseek-v4.1-flash", 0) == "bench,opencode-go/deepseek-v4.1-flash,rep-1"
     assert bench.run_tags("m", 4).endswith("rep-5")
