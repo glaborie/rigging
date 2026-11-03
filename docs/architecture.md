@@ -241,9 +241,11 @@ Every response carries a CSP with a per-response nonce (the page's own inline
 script and style are the only code allowed to run), plus `nosniff`,
 `no-referrer`, `X-Frame-Options: DENY` and `no-store`. `/api/*` is rate-limited
 per client IP before the token check (240/min default, `429` + `Retry-After`).
-The exposure model — TLS proxy, loopback bind, the `sessionStorage` residual
-risk, and what is explicitly not claimed — is
-[`threat-model.md`](threat-model.md).
+The key is `request.client.host`; `harness serve` passes the trusted-proxy list
+to uvicorn, so `X-Forwarded-For` is honoured only from a configured proxy and an
+untrusted peer cannot choose its own bucket. The exposure model — TLS proxy,
+loopback bind, the `sessionStorage` residual risk, and what is explicitly not
+claimed — is [`threat-model.md`](threat-model.md).
 
 The page is a real browser test, not just a route test:
 `tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in

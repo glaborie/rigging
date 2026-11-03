@@ -4,12 +4,13 @@ Each milestone is shippable on its own. The go-public gate is deliberately early
 the first point at which a stranger can run it and understand it.
 
 **Current state (2026-11-03):** v0.1–v0.5 are shipped and v0.6 (scale-out) is
-released as v0.6.2 (v0.6.0 was tagged, then patched for doc drift and the page
-bug in v0.6.1, then hardened in v0.6.2 — see the v0.6 sections). v0.5
+released as v0.6.3 (v0.6.0 was tagged, then patched for doc drift and the page
+bug in v0.6.1, hardened in v0.6.2, and given an explicit proxy-trust model in
+v0.6.3 — see the v0.6 sections). v0.5
 delivered the manifest schema, entry-points discovery, the
 architecture/ADR pass, the README recording and the read-only web widget; v0.6
 delivered subagents, the MLflow exporter, service auth and opt-in parallel tool
-execution. 150 offline tests plus a browser smoke test; ruff + `mypy --strict`
+execution. 153 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean. The four v0.6 proofs are in [`showcase-v0.6.md`](showcase-v0.6.md).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
@@ -211,6 +212,25 @@ manifest changes.
 - [x] 11 new tests: limiter windows/keys/memory, headers and nonce, 429 before
       auth, disabled limiter, bind rules. `make check` 150 passed; the browser
       test still renders the page under the CSP.
+
+## v0.6.3 — proxy-aware rate limiting (2026-11-03)
+
+Patch on v0.6.2. The limiter keyed on `request.client.host` and relied on
+uvicorn's implicit `X-Forwarded-For` default; behind a proxy the trust decision
+was invisible, and a proxy on another host would have collapsed every client
+into one bucket.
+
+- [x] **The trusted-proxy list is explicit.** `RIGGING_SERVICE_TRUSTED_PROXIES`
+      (default `127.0.0.1,::1`) is passed to uvicorn's `forwarded_allow_ips`;
+      `*` and `/0` networks are refused at startup. An untrusted peer's
+      `X-Forwarded-For` is ignored, so it cannot choose its own bucket, and a
+      trusted proxy's header gives one bucket per client.
+- [x] **Tested against a real server.** `tests/test_service_proxy.py` runs
+      uvicorn and asserts per-client buckets from a trusted peer and a shared
+      bucket from an untrusted one. The threat model documents the derivation
+      table and the shared-bucket availability risk; the README and ADR-0021
+      say where the trust list is configured. `make check`: 153 passed; the
+      browser test still renders under the CSP.
 
 ## Standing rules
 

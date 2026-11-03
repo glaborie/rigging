@@ -83,3 +83,20 @@ documentation; all four are closed here rather than deferred to "the proxy".
 Cost: a non-loopback plaintext deployment that used to start now exits 2 with an
 explanation, and the limiter adds one lock acquisition per API request. Both are
 the intended trade.
+
+### The rate-limit key behind a proxy
+
+The first limiter keyed on `request.client.host` and left the
+`X-Forwarded-For` question to uvicorn's default. That happened to work for a
+same-host proxy, but the trust decision was invisible, and a proxy on another
+host would have collapsed every client into one bucket — one script could then
+exhaust it and lock out everyone.
+
+`harness serve` now passes `RIGGING_SERVICE_TRUSTED_PROXIES` (default
+`127.0.0.1,::1`) to uvicorn's `forwarded_allow_ips`, and refuses `*` or a `/0`
+network at startup. The app still does not parse the header: only a peer in the
+list can set it, and uvicorn takes the rightmost address that is not itself a
+trusted proxy, so an appended header cannot be spoofed from the client side. If
+the peer is untrusted or the header is absent, the limit is one shared bucket —
+an availability risk, not an auth bypass, and the reason the proxy's own limiter
+remains the primary control.

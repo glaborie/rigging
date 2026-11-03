@@ -4,7 +4,7 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.6.2 released (2026-11-03).** The harness includes a registry-driven
+**Status: v0.6.3 released (2026-11-03).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a read-only web view
@@ -113,7 +113,10 @@ non-loopback bind.
 `/api/*` is also rate-limited per client IP: 240 requests/minute by default
 (`RIGGING_SERVICE_RATE_LIMIT`, `0` disables). The check runs before the token,
 so a script guessing tokens gets `429` and a `Retry-After` rather than unlimited
-attempts. It is a backstop; the proxy should rate-limit too.
+attempts. Behind a proxy, `X-Forwarded-For` sets the key only when the immediate
+peer is in `RIGGING_SERVICE_TRUSTED_PROXIES` (loopback by default); `*` is
+refused and an untrusted peer's header is ignored. It is a backstop; the proxy
+should rate-limit too.
 
 **Exposing it needs TLS.** A bearer token over plain HTTP crosses the network in
 clear text, so `harness serve` refuses a non-loopback bind with a token unless
