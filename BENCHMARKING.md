@@ -149,6 +149,20 @@ uv run python scripts/bench.py examples/b2b-support/eval.yaml \
 `--no-export` is for a benchmark of the harness itself: no network, no keys, and
 one fewer thing that can slow a run down.
 
+### Filtering by tool
+
+Every trace also carries one tag per tool the run used, plus the list as
+metadata:
+
+```
+tags: ["tool:escalate_to_human", "tool:load_skill", "tool:lookup_order"]
+metadata.tools_called: "escalate_to_human,load_skill,lookup_order"
+```
+
+Filter the traces table by the tag `tool:escalate_to_human`, or use the filter
+search bar. Langfuse's session view does not filter by trace tags, so find the
+trace first and open its session from there.
+
 ## Reading the output
 
 Three files are written to `--out`:

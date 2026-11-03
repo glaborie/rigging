@@ -375,3 +375,42 @@ def test_tags_are_labels_so_capture_content_off_keeps_them(tmp_path, monkeypatch
     attributes = exporter.spans[0][1]
     assert attributes["langfuse.trace.tags"] == ["bench"]
     assert "langfuse.observation.input" not in attributes
+
+
+def test_tool_names_become_trace_tags_and_metadata(tmp_path, monkeypatch):
+    """Langfuse can only filter on what the trace carries: tag every tool used."""
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_tags", "bench,my-model")
+    spec = _spec(tmp_path, tools=["sha256_hex"], observability={"exporters": ["console"]})
+
+    run_agent(spec, "hash it", log=EventLog(tmp_path / "t.db"), client=FakeClient([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "sha256_hex", "arguments": {"text": "x"}}]},
+        {"role": "assistant", "content": "done"},
+    ]))
+
+    root = next(attrs for name, attrs in exporter.ended if name == "invoke_agent")
+    tags = root["langfuse.trace.tags"]
+    assert "tool:sha256_hex" in tags
+    assert {"bench", "my-model"} <= set(tags), "bench tags must survive the merge"
+    assert root["langfuse.trace.metadata.tools_called"] == "sha256_hex"
+    assert root["rigging.tools_called"] == "sha256_hex"
+
+
+def test_a_run_without_tools_carries_no_tool_tags(tmp_path, monkeypatch):
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_tags", "")
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    root = next(attrs for name, attrs in exporter.ended if name == "invoke_agent")
+    assert "langfuse.trace.tags" not in root
+    assert "rigging.tools_called" not in root

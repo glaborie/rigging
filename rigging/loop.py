@@ -115,6 +115,27 @@ def _trace_tags() -> dict[str, Any]:
     return {"langfuse.trace.tags": tags} if tags else {}
 
 
+def _tool_attributes(tools: set[str]) -> dict[str, Any]:
+    """`tool:<name>` trace tags + a `tools_called` metadata list.
+
+    Langfuse maps `langfuse.trace.tags` and `langfuse.trace.metadata.*` onto the
+    trace, and either can be set from any span — which is the only way to do it
+    here, because the root span only learns which tools ran once the loop ends.
+    Tags are exact-match filters in the UI, so one tag per tool beats a joined
+    string: `tool:escalate_to_human`.
+    """
+    if not tools:
+        return {}
+    names = sorted(tools)
+    tags = [*_trace_tags().get("langfuse.trace.tags", []),
+            *(f"tool:{name}" for name in names)]
+    return {
+        "langfuse.trace.tags": tags,
+        "langfuse.trace.metadata.tools_called": ",".join(names),
+        "rigging.tools_called": ",".join(names),
+    }
+
+
 def _sub_env(value: Any) -> Any:
     """${VAR} in manifest option values reads the environment; unset means empty."""
     import os
@@ -278,6 +299,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     # The root span is created after the input guardrail, so a holder keeps the
     # helper below usable on the earliest exit path too.
     root: dict[str, Any] = {"span": None, "ended": False}
+    used_tools: set[str] = set()
 
     def _close_and(result: RunResult) -> RunResult:
         """End the root span and flush every exporter on every exit path.
@@ -293,6 +315,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                 "gen_ai.usage.input_tokens": result.usage.input_tokens,
                 "gen_ai.usage.output_tokens": result.usage.output_tokens,
                 "rigging.cost_usd": result.cost_usd,
+                **_tool_attributes(used_tools),
                 **_content(agent.spec, output_value=result.output, trace=True),
             })
             root["ended"] = True
@@ -417,6 +440,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                 "parallel": bool(spec.parallel_tools),
                 "calls": [c.name for c in response.tool_calls],
             })
+        used_tools.update(c.name for c in response.tool_calls)
 
         if spec.parallel_tools and len(response.tool_calls) > 1:
             messages.extend(_execute_calls_parallel(response.tool_calls, tools, agent, log, run_id))
@@ -455,6 +479,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.steps": step,
         "rigging.handoff": bool(agent.handoff),
         "rigging.cost_usd": agent.prices.cost(spec.model, usage),
+        **_tool_attributes(used_tools),
         **_content(spec, output_value=output, trace=True),
     })
     root["ended"] = True
