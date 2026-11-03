@@ -360,6 +360,15 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         if not response.tool_calls:
             break
 
+        # A batch is more than one call in one model response. Record the mode
+        # either way, so an eval can tell a parallel batch from a serial one
+        # (ADR-0022); a single call is not a batch.
+        if len(response.tool_calls) > 1:
+            log.append(run_id, "tool_batch", {
+                "parallel": bool(spec.parallel_tools),
+                "calls": [c.name for c in response.tool_calls],
+            })
+
         if spec.parallel_tools and len(response.tool_calls) > 1:
             messages.extend(_execute_calls_parallel(response.tool_calls, tools, agent, log, run_id))
         else:
@@ -531,9 +540,9 @@ def _execute_calls_parallel(calls: list[ToolCall], tools: dict[str, Any], agent:
 
     Approvals happen before any tool starts, so a consequential call cannot race
     another for one decision. Events and messages stay in declared order, so the
-    log's `seq` is deterministic even though completion is not.
+    log's `seq` is deterministic even though completion is not. The `tool_batch`
+    event is written by the caller, which knows whether this batch is parallel.
     """
-    log.append(run_id, "tool_batch", {"parallel": True, "calls": [c.name for c in calls]})
     jobs: list[_CallJob] = []
     results: list[ToolResult | None] = []
     for call in calls:

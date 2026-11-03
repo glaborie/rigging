@@ -106,6 +106,31 @@ def test_without_the_flag_tools_run_in_sequence(tmp_path):
     assert started[1] - started[0] >= 0.2, "sequential tools must not overlap"
 
 
+def test_a_serial_batch_records_its_mode(tmp_path):
+    spec = _spec(tmp_path, tools=["slow_a", "slow_b"])
+    log = EventLog(tmp_path / "b.db")
+    result = run_agent(spec, "go", log=log, client=FakeClient(_two_calls()),
+                       registry=_registry())
+
+    batches = [e["payload"] for e in log.events(result.run_id) if e["type"] == "tool_batch"]
+    assert batches == [{"parallel": False, "calls": ["slow_a", "slow_b"]}]
+
+
+def test_a_single_call_is_not_a_batch(tmp_path):
+    spec = _spec(tmp_path, tools=["slow_a"])
+    calls = [
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "slow_a", "arguments": {"delay": 0}},
+        ]},
+        {"role": "assistant", "content": "done"},
+    ]
+    log = EventLog(tmp_path / "one.db")
+    result = run_agent(spec, "go", log=log, client=FakeClient(calls), registry=_registry())
+
+    assert result.status == "ok"
+    assert not [e for e in log.events(result.run_id) if e["type"] == "tool_batch"]
+
+
 def test_messages_and_events_keep_the_declared_order(tmp_path):
     spec = _spec(tmp_path, tools=["slow_b", "slow_a"], parallel_tools=True)
     log = EventLog(tmp_path / "o.db")
