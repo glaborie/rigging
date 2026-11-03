@@ -30,6 +30,7 @@ langfuse = ["opentelemetry-sdk>=1.25", "opentelemetry-exporter-otlp-proto-http>=
 mcp = ["mcp>=2.0"]
 laya = ["laya>=0.3", "torch>=2.4", "transformers>=4.44"]
 service = ["fastapi>=0.111", "uvicorn>=0.30"]
+browser = ["playwright>=1.45"]
 dev = ["pytest>=8.2", "pytest-httpx>=0.30", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10", "jsonschema>=4.22"]
 
 [project.scripts]
@@ -66,7 +67,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 addopts = "-q"
 testpaths = ["tests"]
-markers = ["live: hits a real model or gateway; opt-in only"]
+markers = ["live: hits a real model or gateway; opt-in only", "browser: loads the web view in headless Chromium; opt-in only"]
 
 [dependency-groups]
 dev = [

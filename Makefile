@@ -24,7 +24,8 @@ APPROVE  ?= 0
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean trace serve record
+        retrieval hello demo run chat index eval up down logs clean trace serve record \
+        test-browser browser-install
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -34,7 +35,7 @@ help: ## show this help
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@printf '\nSetup:\n'
 	@printf '  uv sync --extra dev      core + test/lint tooling (make install adds service, mcp)\n'
-	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service]\n'
+	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser]\n'
 	@printf '\nModel access (one is enough):\n'
 	@printf '  ollama signin            beam:cloud, free at time of writing, no API key\n'
 	@printf '  ollama pull qwen3:8b     fully local, the weakest model the demo must pass on\n'
@@ -54,10 +55,17 @@ check: ## what CI runs: lint + typecheck + tests (no network)
 	$(MAKE) --no-print-directory lint typecheck test
 
 test: ## unit + SSE wire fixtures + loop invariants (never touches the network)
-	uv run pytest -m "not live"
+	uv run pytest -m "not live and not browser"
 
 test-live: ## opt-in: hit a real gateway (needs `ollama signin` or a pulled model)
 	uv run pytest -m live
+
+browser-install: ## install the Chromium that `make test-browser` drives
+	uv sync --extra dev --extra service --extra mcp --extra browser
+	uv run playwright install chromium
+
+test-browser: ## opt-in: load the web view in headless Chromium and assert it renders
+	uv run pytest -m browser
 
 lint: ## ruff
 	uv run ruff check .
