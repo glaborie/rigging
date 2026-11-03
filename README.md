@@ -4,7 +4,7 @@
 > The loop, the gateway, the guardrails, the observability backend and the
 > retriever are all swappable implementations of small protocols.
 
-**Status: v0.6.0 released (2026-11-03).** The harness includes a registry-driven
+**Status: v0.6.1 released (2026-11-03).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a read-only web view

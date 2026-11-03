@@ -11,7 +11,7 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.6.0 released (2026-11-03). The loop,
+Current state: v0.6.1 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
@@ -168,7 +168,7 @@ task complete, 30 tests green). v0.2 shipped (tag `v0.2.0`, release published). 
 guardrails + approval live in the demo, fts5/qdrant retrievers, seeded fixture DB,
 `harness index`. All four exit-criteria demos verified live. v0.4 shipped 2026-10-29:
 OTel → Langfuse observability, eval CLI over recorded transcripts (`--replay`),
-MCP consumption. v0.5 shipped the web view and the recorded demo; v0.6.0
+MCP consumption. v0.5 shipped the web view and the recorded demo; v0.6
 (2026-11-03) added subagents, the MLflow exporter, service auth and opt-in
 parallel tool execution. Start from the first unticked box above that.
 
