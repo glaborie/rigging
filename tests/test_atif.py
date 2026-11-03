@@ -150,3 +150,43 @@ def test_a_second_session_joins_the_same_job_without_losing_the_first(tmp_path) 
     assert job_result["n_total_trials"] == 2
     assert sorted(r["trial_name"] for r in job_result["trial_results"]) == ["s_one", "s_two"]
     assert (job / "s_one" / "agent" / "trajectory.json").exists()
+
+
+def test_eval_verdict_becomes_a_harbor_verifier_result(tmp_path) -> None:
+    """Harbor's Overview/Pareto read verifier_result.rewards — from the eval, not invented."""
+    mod = _mod()
+    verdict = {"case": "refund-in-window", "passed": True, "failures": []}
+    doc = mod.build_trajectory("s_test", {"id": "tr_1"}, _observations(), verdict=verdict)
+    assert doc["extra"]["rigging"]["eval"] == verdict
+
+    job = mod.write_harbor_layout([("s_test", doc)], tmp_path / "harbor")
+    result = json.loads((job / "s_test" / "result.json").read_text())
+    assert result["verifier_result"]["rewards"]["reward"] == 1.0
+
+
+def test_a_failed_case_exports_zero(tmp_path) -> None:
+    mod = _mod()
+    verdict = {"case": "c1", "passed": False, "failures": ["tool 'refund' was called"]}
+    doc = mod.build_trajectory("s_test", {"id": "tr_1"}, _observations(), verdict=verdict)
+    job = mod.write_harbor_layout([("s_test", doc)], tmp_path / "harbor")
+    result = json.loads((job / "s_test" / "result.json").read_text())
+    assert result["verifier_result"]["rewards"]["reward"] == 0.0
+
+
+def test_no_verdict_means_no_verifier_result(tmp_path) -> None:
+    mod = _mod()
+    doc = mod.build_trajectory("s_test", {"id": "tr_1"}, _observations())
+    job = mod.write_harbor_layout([("s_test", doc)], tmp_path / "harbor")
+    result = json.loads((job / "s_test" / "result.json").read_text())
+    assert "verifier_result" not in result
+
+
+def test_verdicts_are_read_from_the_event_log_by_run_id(tmp_path) -> None:
+    from rigging.events import EventLog
+
+    mod = _mod()
+    log = EventLog(tmp_path / "eval.db")
+    log.append("r_1", "eval_verdict", {"case": "c1", "passed": False, "failures": ["x"]})
+    verdicts = mod.load_verdicts(tmp_path / "eval.db")
+    assert verdicts["r_1"]["passed"] is False
+    assert mod.load_verdicts(tmp_path / "missing.db") == {}

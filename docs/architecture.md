@@ -107,6 +107,7 @@ CREATE TABLE run_events (
                                -- approval_requested | approval_verdict | tool_result
                                -- budget_check | escalation | output_verdict
                                -- run_finished | error
+                               -- eval_verdict (written by `harness eval`)
   payload     TEXT NOT NULL,   -- JSON, redacted before insert
   span_id     TEXT,
   parent_run_id TEXT,          -- set when this run was spawned as a subagent

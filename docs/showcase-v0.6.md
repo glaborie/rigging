@@ -9,7 +9,7 @@ Prerequisites:
 ```bash
 make install                       # dev + service + mcp extras
 ollama signin                      # beam:cloud; or `ollama pull qwen3:8b`
-make check                         # 176 tests, ruff, mypy --strict
+make check                         # 181 tests, ruff, mypy --strict
 ```
 
 The commands below use `qwen3:8b` because the standing rule says the demo must

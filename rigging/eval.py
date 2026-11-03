@@ -146,7 +146,16 @@ def run_case(case: dict[str, Any], spec: AgentSpec, *, db: Path, approval_allow:
     if "max_steps" in expect and result.steps > expect["max_steps"]:
         failures.append(f"steps {result.steps} > {expect['max_steps']}")
 
-    return CaseResult(id=case.get("id") or case["prompt"][:24], passed=not failures,
+    case_id = case.get("id") or case["prompt"][:24]
+    passed = not failures
+    # The verdict is an event, not a return value only: the ATIF exporter joins
+    # it by run_id to write a Harbor verifier_result, and a reviewer can replay
+    # the judgement from the log alone (hard rule 2).
+    log.append(result.run_id, "eval_verdict", {
+        "case": case_id, "passed": passed, "failures": failures,
+    })
+
+    return CaseResult(id=case_id, passed=passed,
                       failures=failures, run_id=result.run_id, status=result.status,
                       steps=result.steps, cost_usd=result.cost_usd, latency_s=latency,
                       tools=tools)

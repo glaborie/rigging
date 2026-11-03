@@ -15,7 +15,7 @@ Current state: v0.6.3 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, read-only web view with
 bearer auth, subagents and opt-in parallel tool execution are implemented and
-tested (176 offline tests plus a browser smoke test; ruff + `mypy --strict`
+tested (181 offline tests plus a browser smoke test; ruff + `mypy --strict`
 clean). All four exit-criteria demos verified live.
 
 ## Hard rules (violating these fails review)

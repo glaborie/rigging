@@ -127,6 +127,12 @@ It lists trials from `<trial>/result.json` and reads
 `<trial>/agent/trajectory.json`, so the ATIF file lands there. Repeat sessions
 accumulate in the same job.
 
+A trial exported from an eval run also carries the eval's verdict: `harness eval`
+writes an `eval_verdict` event, the exporter joins it by the run id in the trace,
+and the Harbor trial gets `verifier_result.rewards = {"reward": 1.0|0.0}`. That
+is what fills Harbor's Reward column and Outcomes view — a projection of the
+suite's assertions, not a score invented for the viewer.
+
 ## Web view
 
 A read-only page over the same SQLite event log — no second store, no write

@@ -171,7 +171,8 @@ def _tool_calls(obs: dict[str, Any], step_id: int) -> list[dict[str, Any]]:
 
 
 def build_trajectory(session_id: str, trace: dict[str, Any],
-                     observations: list[dict[str, Any]]) -> dict[str, Any]:
+                     observations: list[dict[str, Any]],
+                     verdict: dict[str, Any] | None = None) -> dict[str, Any]:
     """Langfuse observations -> one ATIF v1.7 trajectory document."""
     ordered = sorted(observations, key=lambda o: str(o.get("startTime") or ""))
     roots = [o for o in ordered if not o.get("parentObservationId")]
@@ -301,6 +302,7 @@ def build_trajectory(session_id: str, trace: dict[str, Any],
                 "steps": _int(_attr(root, "rigging.steps")),
                 "handoff": _attr(root, "rigging.handoff"),
                 "system_prompt": _system_prompt(ordered),
+                **({"eval": verdict} if verdict else {}),
             },
         },
     }
@@ -317,6 +319,34 @@ def _package_version() -> str:
 
 def _safe(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", name)
+
+
+def load_verdicts(db: Path) -> dict[str, dict[str, Any]]:
+    """run_id -> the eval's `eval_verdict` event, read-only.
+
+    The verdict cannot ride on the root span: the eval only knows pass/fail once
+    the run has returned, which is after the span closed. So it is an event, and
+    the exporter joins it by the run id the trace already carries.
+    """
+    import sqlite3
+
+    if not db.exists():
+        return {}
+    try:
+        conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
+        rows = conn.execute(
+            "SELECT run_id, payload FROM run_events WHERE type='eval_verdict' ORDER BY seq"
+        ).fetchall()
+        conn.close()
+    except sqlite3.Error:
+        return {}
+    verdicts: dict[str, dict[str, Any]] = {}
+    for run_id, payload in rows:
+        try:
+            verdicts[str(run_id)] = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+    return verdicts
 
 
 def write_harbor_layout(trials: list[tuple[str, dict[str, Any]]], out: Path,
@@ -368,6 +398,13 @@ def write_harbor_layout(trials: list[tuple[str, dict[str, Any]]], out: Path,
             "started_at": now,
             "finished_at": now,
         }
+        verdict = ((doc.get("extra") or {}).get("rigging") or {}).get("eval")
+        if verdict is not None:
+            # Harbor's Overview/Pareto read verifier_result.rewards; this is the
+            # eval's own pass/fail, not an invented score.
+            results[trial_name]["verifier_result"] = {
+                "rewards": {"reward": 1.0 if verdict.get("passed") else 0.0},
+            }
         (trial_dir / "result.json").write_text(
             json.dumps(results[trial_name], indent=2) + "\n")
 
@@ -403,12 +440,15 @@ def main() -> int:
     ap.add_argument("--stdout", action="store_true", help="print the trajectory instead of writing")
     ap.add_argument("--harbor", metavar="DIR",
                     help="also write a Harbor job layout under DIR, for `harbor view DIR`")
+    ap.add_argument("--db", default="runs/eval.db",
+                    help="eval event log to read verdicts from (default: runs/eval.db)")
     a = ap.parse_args()
 
     kind, ident = parse_target(a.target)
     host, headers = credentials()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
+    verdicts = load_verdicts(Path(a.db))
 
     with httpx.Client(base_url=host, headers=headers, timeout=60) as client:
         traces = session_traces(client, ident) if kind == "session" else [{"id": ident}]
@@ -418,8 +458,11 @@ def main() -> int:
         for trace in traces:
             trace_id = trace["id"]
             observations = trace_observations(client, trace_id)
+            run_id = next((_attr(o, "rigging.run_id") for o in observations
+                           if not o.get("parentObservationId")), None)
+            verdict = verdicts.get(str(run_id)) if run_id else None
             doc = build_trajectory(ident if kind == "session" else _session_of(observations, ident),
-                                   trace, observations)
+                                   trace, observations, verdict=verdict)
             if a.stdout:
                 print(json.dumps(doc, indent=2, default=str))
                 continue
@@ -438,6 +481,9 @@ def main() -> int:
     if a.harbor and trials:
         job_dir = write_harbor_layout(trials, Path(a.harbor))
         trial_name = trials[0][0]
+        if not verdicts:
+            print(f"note: no eval verdicts in {a.db}; the Harbor trial carries no "
+                  "verifier_result (Overview and Pareto stay empty)", file=sys.stderr)
         print(f"harbor: {job_dir}\n"
               f"  harbor view {job_dir.parent} --port 8080\n"
               f"  http://127.0.0.1:8080/jobs/{job_dir.name}/trials/{trial_name}",
