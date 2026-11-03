@@ -349,18 +349,22 @@ def write_harbor_layout(trials: list[tuple[str, dict[str, Any]]], out: Path,
         task_path = str(trial_dir.resolve())
         (trial_dir / "config.json").write_text(
             json.dumps({"task": {"path": task_path}}, indent=2) + "\n")
+        model = doc.get("agent", {}).get("model_name")
+        provider, _, short = (model or "").partition("/")
+        model_info = ({"name": short or model, "provider": provider or None}
+                      if model else None)
         results[trial_name] = {
             "id": str(uuid.uuid4()),
             "task_name": doc.get("agent", {}).get("name") or "rigging",
             "trial_name": trial_name,
             "trial_uri": trial_dir.resolve().as_uri(),
             "task_id": {"path": task_path},
-            "source": None,
+            "source": "rigging",
             "task_checksum": hashlib.sha256(trajectory.read_bytes()).hexdigest(),
             "config": {"task": {"path": task_path}},
             "agent_info": {"name": "rigging",
                            "version": doc.get("agent", {}).get("version"),
-                           "model_info": None},
+                           "model_info": model_info},
             "started_at": now,
             "finished_at": now,
         }
@@ -384,6 +388,8 @@ def write_harbor_layout(trials: list[tuple[str, dict[str, Any]]], out: Path,
         f"harbor view {job_dir.parent.resolve()} --port 8080\n"
         f"# http://127.0.0.1:8080/jobs/{job}/trials/<trial>\n"
         "```\n\n"
+        "Open the trial URL directly, or the job's **Rollouts** tab: these trials\n"
+        "have no verifier rewards, so **Overview** and **Pareto** render empty.\n\n"
         "`harbor view` lists trials from `<trial>/result.json` and reads\n"
         "`<trial>/agent/trajectory.json` (ATIF v1.7).\n\n"
         "| Trial | Task |\n|---|---|\n" + rows + "\n")
