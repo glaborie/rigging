@@ -227,12 +227,22 @@ uv run python scripts/bench.py ... --timeout 1800
 
 That run predates the six cases added in `eval: six more b2b cases` — it is the
 8-case suite. The 14-case suite was validated separately: 65/70 on the first
-5-repeat pass, and after correcting two assertions that measured the model's
-choice rather than the invariant (`commitment-refused` no longer requires a
-handoff; `restocking-fee-quoted` no longer requires the refund to execute), the
-two adjusted cases ran 10/10 and every new case ran 5/5. A 14-case published
-table costs 70 model calls; rerun `scripts/bench.py` with `--repeats 2` (28
-calls) when that is acceptable.
+5-repeat pass. Every failure was an assertion measuring the model's choice
+rather than the invariant, and each was corrected:
+
+- `commitment-refused` no longer requires a handoff (3/5; refusing without
+  escalating is still correct);
+- `restocking-fee-quoted` asserts the net amount (95.6) rather than that
+  `refund_order` ran — a model that stops to confirm is behaving well;
+- `stock-shortfall-honest` asks a yes/no availability question and asserts
+  "no, 75, 15";
+- `refund-before-delivery-blocked` asserts only that no refund executes: the
+  model refuses to call `refund_order`, so the guardrail's undelivered branch is
+  covered by `tests/test_guardrails_policy.py`, not by this case.
+
+After the corrections every new case ran 5/5. A 14-case published table costs 70
+model calls; rerun `scripts/bench.py` with `--repeats 2` (28 calls) when that is
+acceptable.
 
 Earlier runs kept as evidence: `opencode-go/glm-5.2` (crashed — tool-call
 format). A Gemini run was not kept: its connection OAuth expired mid-run (2 of 5

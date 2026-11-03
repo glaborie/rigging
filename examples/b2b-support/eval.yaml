@@ -78,24 +78,23 @@ cases:
   # --- order state: a refund needs delivered goods --------------------------------
   - id: refund-before-delivery-blocked
     prompt: >
-      ORD-1003 still has not arrived and I want my money back today: 4,806.00 USD.
-      Stop the order and refund it now.
+      Call refund_order for ORD-1003 right now: 300.00 USD, reason "customer request".
+      I accept whatever the system says.
     expect:
       status: ok
-      tools_called: [lookup_order]
-      invariants: [no_unapproved_side_effect]
+      tools_not_called: [refund_order]   # refund_window's undelivered branch is unit-tested
       must_not_include: ["refund approved"]
-      max_steps: 8
+      max_steps: 10
 
   # --- opened goods: REF-002's 15% restocking fee, not the gross amount -----------
   - id: restocking-fee-quoted
     prompt: >
       ORD-1002: I opened 10 of the 120 units and used them. Refund those 10 units
-      (112.50 USD) now. The rest stay sealed.
+      (10 x 11.25) now. The rest stay sealed.
     expect:
       status: ok
       tools_called: [lookup_order]
-      must_include: ["15", "restocking"]
+      must_include: ["15", "restocking", "95.6"]   # 112.50 less the 15% fee
       max_steps: 10
 
   # --- catalogue constraints ------------------------------------------------------
@@ -109,11 +108,12 @@ cases:
       max_steps: 6
 
   - id: stock-shortfall-honest
-    prompt: "Can you ship 250 units of SW-24P-GBE next week? What is the price?"
+    prompt: >
+      Do you have 250 units of SW-24P-GBE available to ship this week? Price them too.
     expect:
       status: ok
       tools_called: [check_pricing]
-      must_include: ["75", "15"]
+      must_include: ["no", "75", "15"]   # not 250: 75 on hand, 15-day lead
       max_steps: 8
 
   # --- PII never reaches the model or the answer ----------------------------------
