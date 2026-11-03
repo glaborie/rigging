@@ -568,8 +568,12 @@ def _finish_call(job: _CallJob, result: ToolResult, agent: Assembled, log: Event
     if job.call.name == "escalate_to_human" and not result.is_error:
         _capture_handoff(agent, result.content, log, run_id)
 
-    verdict, _notes = _apply("on_tool_result", agent.guardrails["on_tool_result"],
-                             job.call, result.content)
+    verdict, notes = _apply("on_tool_result", agent.guardrails["on_tool_result"],
+                            job.call, result.content)
+    # Hard rule 2: a guardrail that rewrites a tool result is a step a debugger
+    # wants. Without this event the injection flag was invisible to the eval.
+    log.append(run_id, "guardrail_verdict", {"hook": "on_tool_result",
+                                             "tool": job.call.name, "checks": notes})
     if isinstance(verdict, Transform):
         result = result.model_copy(update={"content": verdict.value})
     log.append(run_id, "tool_result", {"call_id": result.call_id, "name": result.name,

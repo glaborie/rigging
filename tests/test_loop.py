@@ -11,7 +11,7 @@ from rigging.approvals import AutoDenyApproval, ScriptedApproval
 from rigging.events import EventLog
 from rigging.loop import run_agent
 from rigging.manifest import AgentSpec, GuardrailRef, Guardrails, Limits
-from rigging.protocols import Allow, Deny
+from rigging.protocols import Allow, Deny, Transform
 from rigging.registry import Registry
 from rigging.types import Message, ModelRequest, ModelResponse, ToolCall, Usage
 
@@ -180,3 +180,39 @@ def test_output_guardrail_can_deny(tmp_path: Path) -> None:
     with EventLog(tmp_path / "r.db") as log:
         result = run_agent(spec, "go", registry=reg, client=client, log=log)
     assert result.status == "denied"
+
+
+def test_tool_result_guardrail_rewrite_is_logged(tmp_path: Path) -> None:
+    """Hard rule 2: a guardrail that rewrites a tool result is a step in the log.
+
+    prompt_injection is a Transform, so without this event the eval could not tell
+    "the model ignored the poisoned note" from "the guardrail flagged it".
+    """
+
+    class Tagger:
+        name = "tagger"
+        hooks: tuple[str, ...] = ("on_tool_result",)
+
+        def on_input(self, messages): return Allow()
+        def on_tool_call(self, call, tool): return Allow()
+        def on_tool_result(self, call, content): return Transform(f"[flagged]\n{content}", "flagged")
+        def on_output(self, text, messages): return Allow()
+
+    reg = _registry()
+    reg.add("guardrail", "tagger", Tagger())
+    spec = _spec(tools=["echo"],
+                 guardrails=Guardrails(on_tool_result=[GuardrailRef(name="tagger")]))
+    client = FakeClient([
+        _resp("", calls=[ToolCall(id="1", name="echo", arguments={"text": "x"})]),
+        _resp("done"),
+    ])
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(spec, "go", registry=reg, client=client, log=log)
+        events = list(log.events(result.run_id))
+
+    verdicts = [e for e in events if e["type"] == "guardrail_verdict"
+                and e["payload"].get("hook") == "on_tool_result"]
+    assert verdicts, "the on_tool_result guardrail left no event"
+    assert verdicts[0]["payload"]["checks"][0]["verdict"] == "Transform"
+    tool_result = next(e for e in events if e["type"] == "tool_result")
+    assert tool_result["payload"]["content"].startswith("[flagged]")
