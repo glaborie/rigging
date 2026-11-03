@@ -36,8 +36,22 @@ def _client(tmp_path, log, **kwargs) -> TestClient:
 def test_index_serves_the_page(tmp_path):
     log, _ = _finished_run(tmp_path)
     body = _client(tmp_path, log).get("/").text
-    assert "EventSource" in body and "/api/runs" in body
+    assert "/api/runs" in body and "Authorization" in body
     assert "read-only view of the event log" in body
+
+
+def test_index_javascript_keeps_its_escaped_newlines():
+    """A Python `\n` in a non-raw string becomes a real newline in the served JS.
+
+    That puts a line break inside a single-quoted JS string, the whole script
+    fails to parse, and the page sits on "loading runs…" forever. This is the
+    regression test for that class of bug.
+    """
+    from rigging.service.app import INDEX_HTML
+
+    assert "indexOf('\\n\\n')" in INDEX_HTML
+    assert "split('\\n')" in INDEX_HTML
+    assert "data.join('\\n')" in INDEX_HTML
 
 
 def test_runs_endpoint_lists_the_run_with_its_session(tmp_path):

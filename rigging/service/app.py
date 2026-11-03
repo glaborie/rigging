@@ -189,7 +189,7 @@ def create_app(db: str | Path, *, idle_seconds: float = 20.0,
     return app
 
 
-INDEX_HTML = """<!doctype html>
+INDEX_HTML = r"""<!doctype html>
 <html lang="en">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -267,7 +267,11 @@ function pill(status) {
 
 async function loadRuns() {
   let res;
-  try { res = await api('/api/runs?limit=50'); } catch { return; }
+  try { res = await api('/api/runs?limit=50'); }
+  catch {
+    runsEl.innerHTML = '<p class="empty">could not load runs — unauthorized, or the server is gone. Reload to try again.</p>';
+    return;
+  }
   if (!res.ok) {
     runsEl.innerHTML = '<p class="empty">unauthorized — reload the page and enter the token</p>';
     return;
