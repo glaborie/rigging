@@ -1,7 +1,7 @@
 # rigging — everyday commands. `make` on its own prints this list.
 #
 # Choices you can override on the command line:
-#   MANIFEST=examples/hello/agent.yaml     which agent to run
+#   MANIFEST=examples/hello/agent.yaml     which agent to run (make web defaults to b2b-support)
 #   PROMPT="..."                           the user message
 #   MODEL=qwen3:8b                         override the manifest's model
 #   APPROVE=0|1                            allow side-effecting tools without asking (demo only)
@@ -16,6 +16,7 @@
 SHELL := /bin/bash
 
 MANIFEST ?= examples/hello/agent.yaml
+WEB_MANIFEST ?= examples/b2b-support/agent.yaml
 PROMPT   ?= say hello in one sentence
 MODEL    ?=
 HELLO_MODEL ?= freellm/codestral   # proven live through OmniRoute -> freellmapi
@@ -124,9 +125,9 @@ record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
 serve: ## read-only web view of the event log: http://127.0.0.1:8000
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),)
 
-web: ## chat in the browser (needs RIGGING_SERVICE_TOKEN): make web MODEL=... PROFILE=...
+web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN)
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
-	  --manifest $(or $(MANIFEST),examples/b2b-support/agent.yaml) \
+	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),)
 
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
