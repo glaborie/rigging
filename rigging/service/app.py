@@ -47,13 +47,45 @@ def _rows(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> lis
     return [dict(row) for row in conn.execute(sql, args)]
 
 
+def _one(conn: sqlite3.Connection, sql: str, args: tuple[Any, ...] = ()) -> dict[str, Any] | None:
+    row = conn.execute(sql, args).fetchone()
+    return dict(row) if row else None
+
+
+_RUN_SELECT = (
+    "SELECT r.*, s.title FROM runs r LEFT JOIN sessions s USING(session_id)"
+)
+
+
+def _run_row(conn: sqlite3.Connection, run_id: str) -> dict[str, Any] | None:
+    return _one(conn, f"{_RUN_SELECT} WHERE r.run_id=?", (run_id,))
+
+
+def _event_rows(conn: sqlite3.Connection, run_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
+    rows = _rows(
+        conn,
+        "SELECT seq, ts, type, payload, span_id FROM run_events"
+        " WHERE run_id=? AND seq>? ORDER BY seq",
+        (run_id, after_seq),
+    )
+    for row in rows:
+        row["payload"] = json.loads(row["payload"])  # already redacted on write
+    return rows
+
+
 def runs(db: str | Path, limit: int = 20) -> list[dict[str, Any]]:
+    with closing(_connect(db)) as conn:
+        return _rows(conn, f"{_RUN_SELECT} ORDER BY r.started_at DESC LIMIT ?", (limit,))
+
+
+def session_runs(db: str | Path, session_id: str) -> list[dict[str, Any]]:
+    """A session's root runs, oldest first: its conversation, not its children."""
     with closing(_connect(db)) as conn:
         return _rows(
             conn,
-            "SELECT r.*, s.title FROM runs r LEFT JOIN sessions s USING(session_id)"
-            " ORDER BY r.started_at DESC LIMIT ?",
-            (limit,),
+            f"{_RUN_SELECT} WHERE r.session_id=? AND r.parent_run_id IS NULL"
+            " ORDER BY r.started_at, r.run_id",
+            (session_id,),
         )
 
 
@@ -69,26 +101,12 @@ def _session_running(db: str | Path, session_id: str) -> bool:
 
 def run(db: str | Path, run_id: str) -> dict[str, Any] | None:
     with closing(_connect(db)) as conn:
-        found = _rows(
-            conn,
-            "SELECT r.*, s.title FROM runs r LEFT JOIN sessions s USING(session_id)"
-            " WHERE r.run_id=?",
-            (run_id,),
-        )
-    return found[0] if found else None
+        return _run_row(conn, run_id)
 
 
 def events(db: str | Path, run_id: str, *, after_seq: int = 0) -> list[dict[str, Any]]:
     with closing(_connect(db)) as conn:
-        rows = _rows(
-            conn,
-            "SELECT seq, ts, type, payload, span_id FROM run_events"
-            " WHERE run_id=? AND seq>? ORDER BY seq",
-            (run_id, after_seq),
-        )
-    for row in rows:
-        row["payload"] = json.loads(row["payload"])  # already redacted on write
-    return rows
+        return _event_rows(conn, run_id, after_seq=after_seq)
 
 
 def _sse(data: dict[str, Any]) -> str:
@@ -97,36 +115,42 @@ def _sse(data: dict[str, Any]) -> str:
 
 
 def _tail(db: str | Path, run_id: str, idle_seconds: float, max_seconds: float) -> Iterator[str]:
-    """Replay the run's events, then follow it until it finishes or goes quiet."""
+    """Replay the run's events, then follow it until it finishes or goes quiet.
+
+    One read-only connection serves the whole stream; polling it every
+    `POLL_INTERVAL_S` is cheaper than reconnecting twice per tick.
+    """
     yield "retry: 2000\n\n"
     seq = 0
     began = time.monotonic()
     quiet_since = began
-    while True:
-        batch = events(db, run_id, after_seq=seq)
-        for ev in batch:
-            seq = ev["seq"]
-            yield _sse(ev)
-        if batch:
-            quiet_since = time.monotonic()
+    with closing(_connect(db)) as conn:
+        while True:
+            batch = _event_rows(conn, run_id, after_seq=seq)
+            for ev in batch:
+                seq = ev["seq"]
+                yield _sse(ev)
+            if batch:
+                quiet_since = time.monotonic()
 
-        row = run(db, run_id)
-        if row is None:
-            yield "event: end\ndata: {\"reason\": \"run disappeared\"}\n\n"
-            return
-        if row["status"] != "running" and not batch:
-            yield f"event: end\ndata: {{\"reason\": \"run finished\", \"status\": \"{row['status']}\"}}\n\n"
-            return
+            row = _run_row(conn, run_id)
+            if row is None:
+                yield "event: end\ndata: {\"reason\": \"run disappeared\"}\n\n"
+                return
+            if row["status"] != "running" and not batch:
+                yield (f"event: end\ndata: {{\"reason\": \"run finished\", "
+                       f"\"status\": \"{row['status']}\"}}\n\n")
+                return
 
-        now = time.monotonic()
-        if now - began > max_seconds:
-            yield "event: end\ndata: {\"reason\": \"max_seconds\"}\n\n"
-            return
-        if now - quiet_since > idle_seconds:
-            # Still running: end the stream and let the page reopen it on demand.
-            yield "event: end\ndata: {\"reason\": \"idle\"}\n\n"
-            return
-        time.sleep(POLL_INTERVAL_S)
+            now = time.monotonic()
+            if now - began > max_seconds:
+                yield "event: end\ndata: {\"reason\": \"max_seconds\"}\n\n"
+                return
+            if now - quiet_since > idle_seconds:
+                # Still running: end the stream and let the page reopen it on demand.
+                yield "event: end\ndata: {\"reason\": \"idle\"}\n\n"
+                return
+            time.sleep(POLL_INTERVAL_S)
 
 
 def _is_loopback(host: str) -> bool:
@@ -365,14 +389,7 @@ def create_app(
     @app.get("/api/sessions/{session_id}", dependencies=guard)
     def get_session(session_id: str) -> dict[str, Any]:
         """Every turn of a session, oldest first — the conversation, not one run."""
-        with closing(_connect(db)) as conn:
-            rows = _rows(
-                conn,
-                "SELECT r.*, s.title FROM runs r LEFT JOIN sessions s USING(session_id)"
-                " WHERE r.session_id=? AND r.parent_run_id IS NULL"
-                " ORDER BY r.started_at, r.run_id",
-                (session_id,),
-            )
+        rows = session_runs(db, session_id)
         if not rows:
             raise HTTPException(status_code=404, detail="no such session")
         return {"session_id": session_id,
