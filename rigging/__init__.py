@@ -12,6 +12,8 @@ from rigging.errors import (
     RiggingError,
     TransportError,
 )
+from rigging.loop import run_agent
+from rigging.manifest import load_manifest
 from rigging.registry import Registry, guardrail, retriever, tool
 from rigging.types import (
     Chunk,
@@ -45,6 +47,8 @@ __all__ = [
     "TransportError",
     "Usage",
     "guardrail",
+    "load_manifest",
     "retriever",
+    "run_agent",
     "tool",
 ]
