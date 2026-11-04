@@ -268,10 +268,17 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
 # --------------------------------------------------------------------------- chain
 
 def _apply(hook: str, chain: Sequence[Any], *args: Any) -> tuple[Verdict, list[dict[str, Any]]]:
-    """Run a guardrail chain. First Deny wins; Transform threads through."""
-    verdict: Verdict = Allow()
+    """Run a guardrail chain. First Deny wins; Transform threads through.
+
+    A `Transform`'s value replaces what the hook inspects: the text for
+    `on_input`/`on_output`, the arguments for `on_tool_call`, the content for
+    `on_tool_result`. The chain keeps the typed objects (Message, ToolCall) so
+    the next guardrail receives the shape its protocol promises, while the
+    caller gets the replacement payload back.
+    """
     notes: list[dict[str, Any]] = []
     current = list(args)
+    changed = False
     for guardrail in chain:
         result = getattr(guardrail, hook)(*current)
         notes.append({"guardrail": guardrail.name, "hook": hook, "verdict": type(result).__name__})
@@ -279,18 +286,49 @@ def _apply(hook: str, chain: Sequence[Any], *args: Any) -> tuple[Verdict, list[d
             return result, notes
         if isinstance(result, Transform):
             current = _apply_transform(hook, current, result.value)
+            changed = True
             notes[-1]["transform"] = result.note
-    if current != list(args):
-        return Transform(current[0] if hook == "on_input" else current[-1]), notes
-    return verdict, notes
+    if not changed:
+        return Allow(), notes
+    return Transform(_hook_payload(hook, current)), notes
 
 
 def _apply_transform(hook: str, current: list[Any], value: Any) -> list[Any]:
     if hook == "on_input":
-        return [value, *current[1:]]
-    if hook == "on_tool_result":
-        return [current[0], value]
+        messages = current[0]
+        replacement = value if isinstance(value, Message) else Message(role="user", content=str(value))
+        if isinstance(messages, (list, tuple)):
+            current[0] = [replacement, *messages[1:]]
+        else:
+            current[0] = [replacement]
+    elif hook == "on_tool_call":
+        call = current[0]
+        if isinstance(value, ToolCall):
+            current[0] = value
+        elif isinstance(call, ToolCall) and isinstance(value, dict):
+            current[0] = call.model_copy(update={"arguments": value})
+    elif hook == "on_tool_result":
+        current[1] = value
+    elif hook == "on_output":
+        current[0] = value
     return current
+
+
+def _hook_payload(hook: str, current: list[Any]) -> Any:
+    """What `_apply` hands back for a transformed chain: text, ToolCall, or content."""
+    if hook == "on_input":
+        messages = current[0]
+        if isinstance(messages, Message):
+            return messages.content
+        if isinstance(messages, (list, tuple)) and messages:
+            first = messages[0]
+            return first.content if isinstance(first, Message) else first
+        return str(messages)
+    if hook == "on_tool_call":
+        return current[0]
+    if hook == "on_tool_result":
+        return current[1]
+    return current[0]
 
 
 # --------------------------------------------------------------------------- run
@@ -573,14 +611,17 @@ def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
             call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
 
     verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
+    if isinstance(verdict, Transform):
+        job.call = call = verdict.value
+        # The `tool_call` event is the model's proposal. Record the arguments that
+        # will actually run beside the verdict that rewrote them.
+        if notes:
+            notes[-1]["arguments"] = call.arguments
     log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name,
                                              "checks": notes})
     if isinstance(verdict, Deny):
         return job, ToolResult.error(call, f"denied by guardrail: {verdict.reason}", denied=True)
 
-    args = verdict.value if isinstance(verdict, Transform) else call.arguments
-    if isinstance(args, dict) and args != call.arguments:
-        job.call = call = call.model_copy(update={"arguments": args})
     if getattr(tool, "side_effecting", False):
         log.append(run_id, "approval_requested", {"tool": call.name, "arguments": call.arguments})
         approved, note = agent.approval.request(call, tool, "side-effecting tool")

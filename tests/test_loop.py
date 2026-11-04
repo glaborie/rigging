@@ -216,3 +216,115 @@ def test_tool_result_guardrail_rewrite_is_logged(tmp_path: Path) -> None:
     assert verdicts[0]["payload"]["checks"][0]["verdict"] == "Transform"
     tool_result = next(e for e in events if e["type"] == "tool_result")
     assert tool_result["payload"]["content"].startswith("[flagged]")
+
+
+def test_output_guardrail_transform_reaches_the_result(tmp_path: Path) -> None:
+    """ADR-0004: `on_output` may transform, not only deny.
+
+    This is what makes `pii_redaction` mean anything on the output side; the
+    transform used to be dropped by `_apply` and returned as `Allow`.
+    """
+
+    class Redactor:
+        name = "redactor"
+        hooks: tuple[str, ...] = ("on_output",)
+
+        def on_input(self, messages: Any) -> Any:
+            return Allow()
+
+        def on_tool_call(self, call: Any, tool: Any) -> Any:
+            return Allow()
+
+        def on_tool_result(self, call: Any, content: str) -> Any:
+            return Allow()
+
+        def on_output(self, text: str, messages: Any) -> Any:
+            return Transform(text.replace("a@b.co", "[email]"), "pii")
+
+    reg = _registry()
+    reg.add("guardrail", "redactor", Redactor)
+    spec = _spec(guardrails=Guardrails(on_output=[GuardrailRef(name="redactor")]))
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(spec, "go", registry=reg,
+                           client=FakeClient([_resp("mail me at a@b.co")]), log=log)
+    assert result.output == "mail me at [email]"
+
+
+def test_tool_call_guardrail_transform_rewrites_arguments(tmp_path: Path) -> None:
+    """ADR-0004/architecture §3: `on_tool_call` may transform the args.
+
+    Before the fix the transform was dropped and the tool ran with the model's
+    original arguments.
+    """
+
+    class Rewriter:
+        name = "rewriter"
+        hooks: tuple[str, ...] = ("on_tool_call",)
+
+        def on_input(self, messages: Any) -> Any:
+            return Allow()
+
+        def on_tool_call(self, call: Any, tool: Any) -> Any:
+            return Transform({**call.arguments, "text": "rewritten"}, "rewrite")
+
+        def on_tool_result(self, call: Any, content: str) -> Any:
+            return Allow()
+
+        def on_output(self, text: str, messages: Any) -> Any:
+            return Allow()
+
+    reg = _registry()
+    reg.add("guardrail", "rewriter", Rewriter)
+    spec = _spec(tools=["echo"],
+                 guardrails=Guardrails(on_tool_call=[GuardrailRef(name="rewriter")]))
+    client = FakeClient([
+        _resp("", calls=[ToolCall(id="1", name="echo", arguments={"text": "original"})]),
+        _resp("done"),
+    ])
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(spec, "go", registry=reg, client=client, log=log)
+        verdict = next(e for e in log.events(result.run_id)
+                       if e["type"] == "guardrail_verdict"
+                       and e["payload"].get("hook") == "on_tool_call")
+    tool_msg = next(m for m in client.requests[1].messages if m.role == "tool")
+    assert tool_msg.content == "rewritten"
+    assert verdict["payload"]["checks"][-1]["arguments"] == {"text": "rewritten"}
+
+
+def test_chained_input_transforms_keep_the_message_shape(tmp_path: Path) -> None:
+    """Each guardrail in a chain must receive `Sequence[Message]`.
+
+    `_apply` used to replace the message with the transformed *string*, so the
+    second guardrail iterated characters and crashed the run.
+    """
+
+    class Suffix:
+        hooks: tuple[str, ...] = ("on_input",)
+
+        def __init__(self, name: str, suffix: str) -> None:
+            self.name, self.suffix = name, suffix
+
+        def on_input(self, messages: Any) -> Any:
+            return Transform(messages[0].content + self.suffix, "suffix")
+
+        def on_tool_call(self, call: Any, tool: Any) -> Any:
+            return Allow()
+
+        def on_tool_result(self, call: Any, content: str) -> Any:
+            return Allow()
+
+        def on_output(self, text: str, messages: Any) -> Any:
+            return Allow()
+
+    reg = _registry()
+    reg.add("guardrail", "a", Suffix("a", " a"))
+    reg.add("guardrail", "b", Suffix("b", " b"))
+
+    spec = _spec(guardrails=Guardrails(
+        on_input=[GuardrailRef(name="a"), GuardrailRef(name="b")]))
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(spec, "go", registry=reg,
+                           client=FakeClient([_resp("done")]), log=log)
+        received = next(e for e in log.events(result.run_id)
+                        if e["type"] == "input_received")
+    assert received["payload"]["content"] == "go a b"
