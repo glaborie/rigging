@@ -71,7 +71,8 @@ rigging/
   service/          FastAPI + SSE view of the event log (ADR-0018); chat.py
                     adds the opt-in write path and WebApproval (ADR-0023)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
-  cli.py            harness run|schema|tools|chat|index|eval|calibrate|serve
+  init_agent.py     `harness init`: the manifest interview, validated before writing
+  cli.py            harness run|init|schema|tools|chat|index|eval|calibrate|serve
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered
@@ -97,6 +98,7 @@ uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
 make test-browser            # opt-in: render the web view and run one turn in Chromium
+uv run harness init          # interview -> agents/<name>/agent.yaml (validated at load)
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)
 ```

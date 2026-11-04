@@ -1,6 +1,7 @@
 """`harness` command line.
 
-v0.1: run, schema, tools. Later milestones add: chat (v0.2), index (v0.3), eval (v0.4).
+v0.1: run, schema, tools. Later milestones add: chat (v0.2), index (v0.3), eval (v0.4),
+serve (v0.5), runs. `init` is the manifest wizard: an interview, never a template dump.
 Anything not yet built says so and exits 2 — it never pretends.
 """
 
@@ -100,6 +101,13 @@ def _parser() -> argparse.ArgumentParser:
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
     tools.add_argument("--kind", default=None, help="tool | guardrail | retriever | decision_model")
+
+    init = sub.add_parser("init", help="interview -> agents/<name>/agent.yaml + prompt.md")
+    init.add_argument("--dir", default="agents", help="parent directory for <name>/ (default: agents)")
+    init.add_argument("--yes", dest="assume_yes", action="store_true",
+                      help="take every suggested default instead of asking")
+    init.add_argument("--force", action="store_true",
+                      help="overwrite an existing agent.yaml / prompt.md")
     return p
 
 
@@ -350,6 +358,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_init(args: argparse.Namespace) -> int:
+    from rigging.init_agent import InitError, run_init
+
+    try:
+        return run_init(directory=args.dir, assume_yes=args.assume_yes, force=args.force)
+    except InitError as exc:
+        print(f"harness init: {exc}", file=sys.stderr)
+        return 2
+
+
 def cmd_tools(args: argparse.Namespace) -> int:
     import rigging.decide
     import rigging.guardrails
@@ -369,7 +387,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
               f"See docs/milestones.md.", file=sys.stderr)
         return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate, "serve": cmd_serve}[args.command]
+    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate, "serve": cmd_serve, "init": cmd_init}[args.command]
     return handler(args)
 
 
