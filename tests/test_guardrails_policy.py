@@ -72,4 +72,5 @@ def test_demo_manifest_wires_the_window_guardrail(tmp_path):
     root = Path(__file__).parents[1]
     spec = load_manifest(str(root / "examples/b2b-support/agent.yaml"))
     names = [g.name for g in spec.guardrails.on_tool_call]
-    assert names == ["consequential_action", "refund_window"]
+    assert "consequential_action" in names
+    assert "refund_window" in names

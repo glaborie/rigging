@@ -296,6 +296,33 @@ def test_refund_is_marked_side_effecting(demo_db):
     assert "refund approved" in result.content
 
 
+def test_lookup_returns_the_contact(demo_db):
+    """The contact is what `pii_pseudonymise` turns into [EMAIL_1] (ADR-0025)."""
+    rows = json.loads(_call("lookup_order", {"order_id": "ORD-1001"}))
+    assert rows[0]["contact"].endswith(".ch")
+
+
+def test_notify_customer_is_side_effecting(demo_db):
+    ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "notify_customer"))
+    assert getattr(ft, "side_effecting", False) is True
+    out = _call("notify_customer", {"contact": "anna.meier@nordwind-ag.ch",
+                                    "message": "your order shipped"})
+    assert "anna.meier@nordwind-ag.ch" in out
+
+
+def test_notify_customer_rejects_a_non_address(demo_db):
+    assert _call("notify_customer", {"contact": "[EMAIL_9]", "message": "x"}).startswith("error:")
+
+
+def test_submit_basket_records_the_contact(demo_db):
+    """An order created from a basket used to have no contact, so there was
+    nobody for `notify_customer` to email."""
+    _call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2})
+    out = json.loads(_call("submit_basket", {"contact": "joe@wh.com"}))
+    rows = json.loads(_call("lookup_order", {"order_id": out["order_id"]}))
+    assert rows[0]["contact"] == "joe@wh.com"
+
+
 def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, monkeypatch):
     import yaml
 

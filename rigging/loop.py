@@ -162,19 +162,29 @@ def _coerce_tool(obj: Any) -> Any:
     return obj if hasattr(obj, "run") else FunctionTool(obj)
 
 
-def _instantiate_guardrail(obj: Any, config: dict[str, Any]) -> Any:
-    return obj(**config) if isinstance(obj, type) else obj
+def _instantiate_guardrail(obj: Any, config: dict[str, Any],
+                           session: str | None = None) -> Any:
+    """Construct a guardrail, giving session-scoped ones the run's session (ADR-0026).
+
+    A guardrail opts in by setting `wants_session = True`; it then receives
+    `session=` and is responsible for keeping its own state across runs.
+    """
+    if not isinstance(obj, type):
+        return obj
+    if session is not None and getattr(obj, "wants_session", False):
+        return obj(session=session, **config)
+    return obj(**config)
 
 
 #: The demo capability pack is imported only when a manifest names one of these.
 _DEMO_TOOL_NAMES = frozenset({
-    "lookup_order", "search_catalogue", "check_pricing", "refund_order",
-    "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
+    "lookup_order", "search_catalogue", "check_pricing", "refund_order", "notify_customer",
+    "add_to_basket", "view_basket", "update_basket_item", "clear_basket", "submit_basket",
 })
 
 
 def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any = None,
-             prices: PriceTable | None = None) -> Assembled:
+             prices: PriceTable | None = None, session_id: str | None = None) -> Assembled:
     if registry is None:
         # The default registry is populated by the built-in capability packs at
         # import; third-party entry points are discovered (ADR-0003).
@@ -211,9 +221,24 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         tools.extend(collect(spec.mcp_servers, allow=mcp_names or None))
 
     guardrails: dict[str, list[Any]] = {"on_input": [], "on_tool_call": [], "on_tool_result": [], "on_output": []}
+    # One instance per manifest, shared across hooks: a stateful guardrail (the
+    # sentinel map, ADR-0025) must see the same object on all four hooks. Two
+    # different configs for one name are a manifest error, not a silent override.
+    built: dict[str, Any] = {}
+    configs: dict[str, str] = {}
     for hook in guardrails:
         for ref in getattr(spec.guardrails, hook):
-            impl = _instantiate_guardrail(registry.get("guardrail", ref.name), ref.config)
+            config_key = json.dumps(ref.config, sort_keys=True, default=str)
+            if ref.name in configs and configs[ref.name] != config_key:
+                raise ManifestError(
+                    f"guardrail {ref.name!r} is configured differently per hook; "
+                    "one manifest, one instance"
+                )
+            configs[ref.name] = config_key
+            if ref.name not in built:
+                built[ref.name] = _instantiate_guardrail(
+                    registry.get("guardrail", ref.name), ref.config, session_id)
+            impl = built[ref.name]
             declared = tuple(getattr(impl, "hooks", ()))
             if hook not in declared:
                 raise ManifestError(
@@ -355,7 +380,8 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
               history: list[Message] | None = None,
               parent_run_id: str | None = None, depth: int = 0,
               run_id: str | None = None) -> RunResult:
-    agent = assemble(spec, registry=registry, client=client, prices=prices)
+    agent = assemble(spec, registry=registry, client=client, prices=prices,
+                     session_id=session_id)
     if approval is not None:
         agent.approval = approval
 
@@ -659,20 +685,22 @@ def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
         return job, ToolResult.error(
             call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}")
 
+    proposed = call
     verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
     if isinstance(verdict, Transform):
         job.call = call = verdict.value
-        # The `tool_call` event is the model's proposal. Record the arguments that
-        # will actually run beside the verdict that rewrote them.
-        if notes:
-            notes[-1]["arguments"] = call.arguments
+        # The post-transform arguments are deliberately not logged: a guardrail may
+        # restore a PII sentinel, and the log is the last place that value may
+        # appear (ADR-0025). `tool_call` above is the model's proposal; the verdict
+        # note says a rewrite happened.
     log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name,
                                              "checks": notes})
     if isinstance(verdict, Deny):
         return job, ToolResult.error(call, f"denied by guardrail: {verdict.reason}", denied=True)
 
     if getattr(tool, "side_effecting", False):
-        log.append(run_id, "approval_requested", {"tool": call.name, "arguments": call.arguments})
+        log.append(run_id, "approval_requested", {"tool": proposed.name,
+                                                  "arguments": proposed.arguments})
         approved, note = agent.approval.request(call, tool, "side-effecting tool")
         log.append(run_id, "approval_verdict", {"tool": call.name, "approved": approved,
                                                 "note": note})

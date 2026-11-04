@@ -1,4 +1,4 @@
-"""The four deterministic built-ins (ADR-0004, ADR-0009).
+"""The deterministic built-ins (ADR-0004, ADR-0009, ADR-0025).
 
 Registering on import is the decorator pattern by hand: each class carries its
 own registry name, so a manifest names `pii_redaction`, not a Python path.
@@ -7,12 +7,13 @@ own registry name, so a manifest names `pii_redaction`, not a Python path.
 from rigging.guardrails.commitment import CommitmentGuardrail
 from rigging.guardrails.consequential import ConsequentialActionGuardrail
 from rigging.guardrails.injection import PromptInjectionGuardrail
-from rigging.guardrails.pii import PIIRedactionGuardrail
+from rigging.guardrails.pii import PIIPseudonymiseGuardrail, PIIRedactionGuardrail
 from rigging.guardrails.refund_window import RefundWindowGuardrail
 from rigging.registry import DEFAULT_REGISTRY
 
 BUILTIN_GUARDRAILS = (
     PIIRedactionGuardrail,
+    PIIPseudonymiseGuardrail,
     PromptInjectionGuardrail,
     ConsequentialActionGuardrail,
     CommitmentGuardrail,
@@ -26,6 +27,7 @@ __all__ = [
     "BUILTIN_GUARDRAILS",
     "CommitmentGuardrail",
     "ConsequentialActionGuardrail",
+    "PIIPseudonymiseGuardrail",
     "PIIRedactionGuardrail",
     "PromptInjectionGuardrail",
     "RefundWindowGuardrail",

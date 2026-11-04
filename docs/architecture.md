@@ -44,7 +44,7 @@ that claim seriously: the loop knows about protocols, never about vendors.
 | `LLMClient` | `stream(request) -> Iterator[ModelDelta]`, `complete(request) -> ModelResponse` | `OpenAICompatClient` (httpx) | v0.1 |
 | `Tool` | `name`, `description`, `json_schema`, `side_effecting`, `run(call, ctx) -> ToolResult` | decorator-registered functions | v0.1 |
 | `SkillResolver` | `discover() -> list[SkillMeta]`, `load(name) -> Skill` | filesystem + packages | v0.2 |
-| `Guardrail` | `on_input`, `on_tool_call`, `on_tool_result`, `on_output` → `Allow \| Deny \| Transform` | 4 built-ins | v0.3 |
+| `Guardrail` | `on_input`, `on_tool_call`, `on_tool_result`, `on_output` → `Allow \| Deny \| Transform` | 6 built-ins | v0.3 |
 | `ApprovalPolicy` | `request(call, tool, reason) -> (approved, note)` | CLI prompt, scripted (tests), web page (`--manifest`, ADR-0023) | v0.3 / v0.7 |
 | `Retriever` | `search(query, k) -> list[Chunk]`, `requires_indexing` | Qdrant (default), FTS5 (reference) | v0.3 |
 | `DecisionModel` | `decide(state, questions) -> typed answers + probabilities` | Laya (advisory) | v0.3 |

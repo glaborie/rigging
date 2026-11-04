@@ -23,6 +23,7 @@ tools:
   - clear_basket
   - submit_basket
   - refund_order
+  - notify_customer
   - load_skill
   - escalate_to_human
 
@@ -35,8 +36,9 @@ retriever:
 
 guardrails:
   on_input:
-    - pii_redaction
+    - pii_pseudonymise            # ADR-0025: [EMAIL_1] to the model, real value to tools
   on_tool_call:
+    - pii_pseudonymise            # sentinels in the args come back as the real value
     - name: consequential_action
       config:
         max_amount_usd: 500
@@ -45,9 +47,10 @@ guardrails:
       config:
         max_days: 30
   on_tool_result:
+    - pii_pseudonymise            # a tool that returns a contact hands back the sentinel
     - prompt_injection
   on_output:
-    - pii_redaction
+    - pii_pseudonymise
     - commitment_check
 
 approval:

@@ -24,6 +24,7 @@ operator must supply.
 | Run transcripts: prompts, model output, reasoning, tool arguments and results | `run_events.payload`, redacted on write | **Confidential**; may contain personal data |
 | Session titles, model names, timings, token counts | `sessions`, `runs` | Internal |
 | The bearer token | `RIGGING_SERVICE_TOKEN` (env), browser `sessionStorage` | **Secret** |
+| The sentinel map (real value → `[EMAIL_1]`) | `SentinelStore`, process memory, per session with a TTL; never persisted or logged | **Secret**; it re-identifies a transcript |
 | The database file | one SQLite file on disk (`rigging.db` by default) | **Confidential** |
 
 The transcript is the sensitive asset. "Read-only" is not "harmless": a run can
@@ -31,6 +32,11 @@ contain a customer's order, a support ticket, or a model's chain of thought.
 Redaction (hard rule 5, `rigging/redact.py`) is applied **before** insert, and
 `tests/test_redact.py` asserts on the database file itself. Redaction is
 pattern-based; it reduces exposure, it is not a guarantee (see §6).
+
+`pii_pseudonymise` (ADR-0025) is an **opt-in alternative** that replaces values
+with stable sentinels (`[EMAIL_1]`) and restores them in tool arguments, so a
+model can act on a customer without reading them. Its map is the secret in the
+asset table: the log stays a dead end only as long as that process memory does.
 
 ### Data flow
 
@@ -85,6 +91,7 @@ loopback by default, which is safe only because it does not leave the host.
 | T12 | Token has no expiry or revocation | Rotation is a restart with a comma-separated list (`old,new`) | No per-token expiry, no revocation list, no session concept |
 | T14 | The chat write path spends money or runs tools without the operator | Opt-in (`--manifest`); token required even on loopback; one turn at a time per session (`409`); the loop's `ApprovalPolicy` still gates every side-effecting tool, and `WebApproval` only carries the page's answer | A holder of the token can start runs by design; there is no per-user quota. The demo DB's `refund_order` records intent and `submit_basket` records an unpaid, unshipped order — neither moves money or stock |
 | T13 | No record of **who** read what | The service logs nothing by default; the proxy can log requests | No per-user audit trail. A regulated deployment needs OIDC + audit (see §7) |
+| T15 | The sentinel map leaks, re-identifying a transcript | The map lives in a process-scoped `SentinelStore`, keyed by session, bounded by a TTL and a session cap; never written to the log, never persisted, not returned in `RunResult` (ADR-0025/0026); `redact_event` still redacts the boundary | A core dump, debugger, or a `print` re-identifies everything the live session covered — now up to an hour of a conversation rather than one turn. Opt-in and weaker than `[REDACTED]`; do not enable it on data you would not store |
 
 ---
 
@@ -99,6 +106,7 @@ loopback by default, which is safe only because it does not leave the host.
 | Page actually runs under CSP | `INDEX_HTML` nonce attributes | `test_service_browser.py` (headless Chromium) |
 | Read-only database | `_connect` (`mode=ro`) | `test_the_service_never_writes` |
 | Redaction before insert | `rigging/redact.py` | `test_redact.py` (asserts on the DB file) |
+| Sentinels never reach the log | `guardrails/pii.py` (ADR-0025) | `test_pseudonymise.py::test_the_model_and_the_log_never_see_the_value` |
 | No write/launch/approve route without a manifest | route list is six GETs | `test_the_service_never_writes` |
 | Chat refuses to exist without a token | `create_app` guard | `test_chat_refuses_to_exist_without_a_token` |
 | Approval is answered by the loop's policy, not the page | `service/chat.py::WebApproval` | `test_approval_is_answered_from_the_page`, `test_denied_approval_blocks_the_tool` |
@@ -214,6 +222,10 @@ provide it:
   the volume. No KMS, no field-level encryption.
 - **Redaction is not DLP.** `redact.py` is a set of patterns. It is tested, but
   it cannot certify that a transcript is free of personal data.
+- **Pseudonymisation is not encryption.** `pii_pseudonymise` is reversible by
+  design, and the key is plain process memory. A leaked map plus a leaked log is
+  a full disclosure; `[REDACTED]` is not. Choose one per manifest, and treat the
+  sentinel mode as the weaker of the two.
 - **No per-user authentication or authorization.** One shared token. Reads are
   all-or-nothing; chat (when enabled) can start a run and approve a tool for
   anyone holding it. No RBAC, no tenants, no per-run access control.

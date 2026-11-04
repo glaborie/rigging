@@ -65,7 +65,7 @@ rigging/
   manifest.py       YAML load, JSON Schema validation, single-level defaults
   redact.py         the security boundary
   client/           OpenAI-compatible httpx client + hand-written SSE parser
-  guardrails/       pii, injection, consequential_action, commitment
+  guardrails/       pii (redact + pseudonymise), injection, consequential_action, commitment
   retriever/        fts5 (works), qdrant (v0.3 stub)
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations

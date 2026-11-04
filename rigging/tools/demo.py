@@ -89,27 +89,36 @@ def _session(ctx: RunContext | None) -> str:
 
 
 def _ensure_multiline_orders(db: sqlite3.Connection) -> None:
-    """An order can have several lines; old seeded databases keyed it by order_id alone.
+    """Bring an older seeded database up to the current orders schema.
 
-    The rebuild is idempotent and preserves every row: `lookup_order` already
-    returns a list, so only the primary key changes.
+    An order can have several lines; old seeds keyed it by `order_id` alone, and
+    pre-ADR-0025 seeds have no `contact`. Both upgrades are idempotent and keep
+    every row: `lookup_order` already returns a list, so only the key changes.
     """
     row = db.execute(
         "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orders'"
     ).fetchone()
-    if row is None or "PRIMARY KEY (order_id, sku)" in row["sql"]:
+    if row is None:
         return
-    db.executescript("""
-    ALTER TABLE orders RENAME TO orders_single_line;
-    CREATE TABLE orders(order_id TEXT, sku TEXT, qty INTEGER,
-                        unit_price REAL, status TEXT, delivered_at TEXT, note TEXT,
-                        PRIMARY KEY (order_id, sku));
-    INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note)
-      SELECT order_id, sku, qty, unit_price, status, delivered_at, note
-      FROM orders_single_line;
-    DROP TABLE orders_single_line;
-    """)
-    db.commit()
+    columns = {r["name"] for r in db.execute("PRAGMA table_info(orders)")}
+    if "PRIMARY KEY (order_id, sku)" not in row["sql"]:
+        contact = "contact" if "contact" in columns else "NULL"
+        db.executescript(f"""
+        ALTER TABLE orders RENAME TO orders_single_line;
+        CREATE TABLE orders(order_id TEXT, sku TEXT, qty INTEGER,
+                            unit_price REAL, status TEXT, delivered_at TEXT, note TEXT,
+                            contact TEXT,
+                            PRIMARY KEY (order_id, sku));
+        INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note, contact)
+          SELECT order_id, sku, qty, unit_price, status, delivered_at, note, {contact}
+          FROM orders_single_line;
+        DROP TABLE orders_single_line;
+        """)
+        db.commit()
+        columns.add("contact")
+    if "contact" not in columns:
+        db.execute("ALTER TABLE orders ADD COLUMN contact TEXT")
+        db.commit()
 
 
 def _now() -> str:
@@ -220,9 +229,13 @@ def _next_order_id(db: sqlite3.Connection) -> str:
 
 
 @tool(side_effecting=True)
-def submit_basket(ctx: RunContext) -> str:
+def submit_basket(ctx: RunContext, contact: str = "") -> str:
     """Convert this session's basket into an order. Requires approval. Every line must
-    meet its MOQ and fit stock; the order is recorded as `processing`, unpaid and unshipped."""
+    meet its MOQ and fit stock; the order is recorded as `processing`, unpaid and unshipped.
+
+    `contact` is the customer's email for this order. Pass it exactly as it appeared
+    in the conversation: a placeholder like [EMAIL_1] is restored before this runs,
+    so the order gets the real address and the model never sees it (ADR-0025)."""
     session_id = _session(ctx)
     with closing(_basket_db()) as db:
         _ensure_multiline_orders(db)
@@ -248,10 +261,10 @@ def submit_basket(ctx: RunContext) -> str:
         order_id = _next_order_id(db)
         try:
             db.executemany(
-                "INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note)"
-                " VALUES (?,?,?,?,?,?,?)",
+                "INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note,"
+                " contact) VALUES (?,?,?,?,?,?,?,?)",
                 [(order_id, item["sku"], item["qty"], item["unit_price"],
-                  "processing", None, f"from basket {session_id}")
+                  "processing", None, f"from basket {session_id}", contact or None)
                  for item in basket["items"]],
             )
             db.execute("DELETE FROM session_basket_items WHERE session_id = ?", (session_id,))
@@ -343,6 +356,27 @@ def refund_order(order_id: str, amount: float, reason: str) -> str:
         db.commit()
     return (f"refund approved and recorded for {order_id}: {_money(amount)} USD ({reason}). "
             "Per policy ACC-001 it appears as a credit note on the next invoice.")
+
+
+@tool(side_effecting=True)
+def notify_customer(contact: str, message: str) -> str:
+    """Email a customer about their order. Requires approval.
+
+    `contact` is the address `lookup_order` returned. The pseudonymisation
+    guardrail restores it from its placeholder before this runs, so the model
+    never sees the address and the tool still gets the real one (ADR-0025).
+    """
+    if not contact or "@" not in contact:
+        return f"error: {contact!r} is not an email address"
+    with closing(_db()) as db:
+        db.execute(
+            "CREATE TABLE IF NOT EXISTS notifications("
+            "id INTEGER PRIMARY KEY AUTOINCREMENT, contact TEXT NOT NULL,"
+            "message TEXT NOT NULL, sent_at TEXT NOT NULL)")
+        db.execute("INSERT INTO notifications(contact, message, sent_at) VALUES (?,?,?)",
+                   (contact, message, _now()))
+        db.commit()
+    return f"email queued to {contact}: {message}"
 
 
 _ = DEFAULT_REGISTRY  # imported for registration side-effects; see loop.assemble

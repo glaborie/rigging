@@ -19,9 +19,8 @@ def test_example_manifest_loads() -> None:
 
 def test_guardrail_shorthand_and_config() -> None:
     spec = load_manifest("examples/b2b-support/agent.yaml")
-    consequentials = spec.guardrails.on_tool_call
-    assert consequentials[0].name == "consequential_action"
-    assert consequentials[0].config["max_amount_usd"] == 500
+    consequentials = {g.name: g for g in spec.guardrails.on_tool_call}
+    assert consequentials["consequential_action"].config["max_amount_usd"] == 500
 
 
 def test_defaults_merge(tmp_path: Path) -> None:

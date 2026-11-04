@@ -326,7 +326,9 @@ def test_tool_call_guardrail_transform_rewrites_arguments(tmp_path: Path) -> Non
                        and e["payload"].get("hook") == "on_tool_call")
     tool_msg = next(m for m in client.requests[1].messages if m.role == "tool")
     assert tool_msg.content == "rewritten"
-    assert verdict["payload"]["checks"][-1]["arguments"] == {"text": "rewritten"}
+    # The event records that a rewrite happened, not the rewritten payload: a
+    # guardrail may restore a PII sentinel and the log must not carry it.
+    assert verdict["payload"]["checks"][-1]["transform"] == "rewrite"
 
 
 def test_chained_input_transforms_keep_the_message_shape(tmp_path: Path) -> None:
