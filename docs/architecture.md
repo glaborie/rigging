@@ -168,6 +168,7 @@ For that to be honest, the loop ends the root span on **every** exit path — `o
 | guardrail deny | tool message (tool hook) or `RunResult(status="denied")` (input/output hook) |
 | approval deny | tool message `denied by policy`; the model is told, the user is shown |
 | limits reached | one final call with tools disabled; then `RunResult(status="budget_exhausted")` with the partial transcript |
+| empty model answer | one retry with tools disabled; a second empty reply is `RunResult(status="error")`, never `ok` with no output |
 | Ctrl-C | `CancelledError` propagates; partial transcript is already durable |
 
 ## 7. Entry-points for third-party capabilities

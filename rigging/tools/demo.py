@@ -171,19 +171,31 @@ def lookup_order(order_id: str) -> str:
     return json.dumps([dict(r) for r in rows], indent=1)
 
 
+def _like_escape(text: str) -> str:
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @tool()
 def search_catalogue(query: str = "", limit: int = 10) -> str:
     """Search the product catalogue by SKU or name; an empty query browses the first items."""
     limit = max(1, min(int(limit), 50))
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
+    query = query.strip()
+    # "switches" should find "8-port gigabit switch"; customers rarely type the
+    # exact catalogue noun. Try the query and its common singular forms.
+    variants = sorted({query, query.rstrip("s"), query.rstrip("es")} - {""}) or [""]
+    clauses = " OR ".join(["sku LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'"] * len(variants))
+    params: list[object] = []
+    for variant in variants:
+        pattern = f"%{_like_escape(variant)}%"
+        params.extend((pattern, pattern))
+    params.extend((query, limit))
     with closing(_db()) as db:
         rows = db.execute(
             "SELECT sku, name, list_price, moq, lead_days, stock FROM products"
-            " WHERE sku LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'"
+            f" WHERE {clauses}"
             " ORDER BY CASE WHEN lower(sku)=lower(?) THEN 0 ELSE 1 END, sku"
             " LIMIT ?",
-            (pattern, pattern, query, limit),
+            params,
         ).fetchall()
     products = [dict(r) for r in rows]
     payload: dict[str, object] = {

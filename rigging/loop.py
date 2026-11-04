@@ -508,6 +508,25 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         })
         messages.append(response.message)
 
+        if not response.tool_calls and not (response.message.content or "").strip():
+            # A reasoning model occasionally returns `stop` with no text: the
+            # tokens were spent but there is nothing to show the user. Ask once
+            # for a real answer; a second empty completion is a structured
+            # failure, never a success with an empty output.
+            log.append(run_id, "error", {"stage": "empty_answer", "step": step,
+                                         "error": "the model returned no text"})
+            final = _final_answer(agent, spec, messages, log, run_id, nudge=_EMPTY_NUDGE)
+            if final is not None:
+                usage = usage + final.usage
+            if final is None or not (final.message.content or "").strip():
+                error = "the model returned an empty answer twice"
+                log.append(run_id, "error", {"stage": "empty_answer", "error": error})
+                return _close_and(RunResult(run_id=run_id, status="error", usage=usage,
+                                            steps=step, error=error,
+                                            cost_usd=agent.prices.cost(spec.model, usage)))
+            last = final
+            break
+
         if not response.tool_calls:
             break
 
@@ -533,16 +552,22 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     # ---- final answer
     if exhausted:
         log.append(run_id, "budget_check", {"exhausted": exhausted})
-        final = _final_answer(agent, spec, messages, log, run_id, stream)
+        final = _final_answer(agent, spec, messages, log, run_id)
         if final is None:
             return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
                                         steps=spec.limits.max_steps, error=exhausted,
                                         cost_usd=agent.prices.cost(spec.model, usage)))
-        last = final
         # The final answer is a real model call: its tokens are part of the run,
         # and the event log already has them. Leaving them out made RunResult
         # disagree with EventLog.usage() and under-report cost.
         usage = usage + final.usage
+        if not (final.message.content or "").strip():
+            error = f"{exhausted}; the final answer was empty"
+            log.append(run_id, "error", {"stage": "final_answer", "error": error})
+            return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
+                                        steps=spec.limits.max_steps, error=error,
+                                        cost_usd=agent.prices.cost(spec.model, usage)))
+        last = final
 
     output = last.message.content if last else ""
     out_verdict, out_notes = _apply("on_output", agent.guardrails["on_output"], output, messages)
@@ -736,13 +761,20 @@ def _capture_handoff(agent: Assembled, content: str, log: EventLog, run_id: str)
                                       "transcript_run_id": agent.handoff.transcript_run_id})
 
 
+_EXHAUSTED_NUDGE = (
+    "You have reached this run's limit. Answer now with what you have, or say plainly "
+    "what is missing and that a human will follow up. Do not call tools.")
+_EMPTY_NUDGE = (
+    "Your last reply was empty. Answer the user now with what you have, or say plainly "
+    "what is missing. Do not call tools.")
+
+
 def _final_answer(agent: Assembled, spec: AgentSpec, messages: list[Message], log: EventLog,
-                  run_id: str, stream: Callable[[ModelDelta], None] | None) -> ModelResponse | None:
-    """One last call with tools disabled (ADR-0010)."""
-    nudge = Message(role="user", content=(
-        "You have reached this run's limit. Answer now with what you have, or say plainly "
-        "what is missing and that a human will follow up. Do not call tools."))
-    request = ModelRequest(model=spec.model, messages=[*messages, nudge], tools=[])
+                  run_id: str, *, nudge: str = _EXHAUSTED_NUDGE) -> ModelResponse | None:
+    """One last call with tools disabled: budget exhaustion or an empty answer."""
+    request = ModelRequest(model=spec.model,
+                           messages=[*messages, Message(role="user", content=nudge)],
+                           tools=[])
     log.append(run_id, "model_request", {"model": spec.model, "final_answer": True})
     try:
         response: ModelResponse = agent.client.complete(request)

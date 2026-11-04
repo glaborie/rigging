@@ -62,6 +62,9 @@ def test_search_catalogue_by_name_and_sku(demo_db):
     exact = json.loads(_call("search_catalogue", {"query": "SW-24P-GBE"}))
     assert exact["products"][0]["sku"] == "SW-24P-GBE"  # an exact SKU ranks first
 
+    plural = json.loads(_call("search_catalogue", {"query": "switches"}))
+    assert {p["sku"] for p in plural["products"]} >= {"SW-8P-GBE", "SW-24P-GBE"}
+
     limited = json.loads(_call("search_catalogue", {"query": "", "limit": 3}))
     assert limited["returned"] == 3
 

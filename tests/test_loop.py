@@ -140,6 +140,45 @@ def test_budget_exhaustion_asks_for_final_answer(tmp_path: Path) -> None:
     assert result.usage == logged_usage
 
 
+def test_empty_answer_is_retried_once(tmp_path: Path) -> None:
+    client = FakeClient([_resp(""), _resp("here is the answer")])
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(_spec(), "go", registry=_registry(), client=client, log=log)
+        events = list(log.events(result.run_id))
+    assert result.status == "ok"
+    assert result.output == "here is the answer"
+    assert len(client.requests) == 2
+    assert any(e["type"] == "error" and e["payload"].get("stage") == "empty_answer"
+               for e in events)
+
+
+def test_empty_answer_twice_is_an_error(tmp_path: Path) -> None:
+    client = FakeClient([_resp(""), _resp("")])
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(_spec(), "go", registry=_registry(), client=client, log=log)
+        events = list(log.events(result.run_id))
+        row = log.runs()[0]
+        logged_usage = log.usage(result.run_id)
+    assert result.status == "error"
+    assert result.output == ""
+    assert "empty answer twice" in (result.error or "")
+    assert result.usage == logged_usage
+    assert row["status"] == "error"
+    assert [e["payload"]["status"] for e in events if e["type"] == "run_finished"] == ["error"]
+
+
+def test_empty_final_answer_after_exhaustion_is_not_ok(tmp_path: Path) -> None:
+    client = FakeClient([
+        _resp(calls=[ToolCall(id="1", name="echo", arguments={"text": "x"})]),
+        _resp(""),
+    ])
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(_spec(tools=["echo"], limits=Limits(max_steps=1)), "go",
+                           registry=_registry(), client=client, log=log)
+    assert result.status == "budget_exhausted"
+    assert "final answer was empty" in (result.error or "")
+
+
 def test_every_step_is_an_event(tmp_path: Path) -> None:
     client = FakeClient([
         _resp(calls=[ToolCall(id="1", name="echo", arguments={"text": "x"})]),
