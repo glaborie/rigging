@@ -74,6 +74,37 @@ CREATE INDEX IF NOT EXISTS idx_runs_session ON runs(session_id);
 """
 
 
+def project_escalations(conn: sqlite3.Connection, limit: int = 50) -> list[dict[str, Any]]:
+    """Handoffs as a human queue, newest first, joined to their run and session.
+
+    Shared by `EventLog.escalations()` and the service's read-only
+    `GET /api/escalations`: one projection, so the CLI and the page cannot drift.
+    `rowid` breaks a `ts` tie so two escalations written in the same second keep
+    their order.
+    """
+    limit = max(1, min(int(limit), 200))
+    rows = conn.execute(
+        "SELECT e.run_id, e.ts, e.payload, r.session_id, r.model, s.title"
+        " FROM run_events e JOIN runs r ON r.run_id = e.run_id"
+        " LEFT JOIN sessions s ON s.session_id = r.session_id"
+        " WHERE e.type = 'escalation'"
+        " ORDER BY e.ts DESC, e.rowid DESC LIMIT ?",
+        (limit,),
+    )
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        payload = json.loads(row["payload"])
+        out.append({
+            **payload,
+            "run_id": row["run_id"],
+            "session_id": row["session_id"],
+            "session_title": row["title"],
+            "model": row["model"],
+            "ts": row["ts"],
+        })
+    return out
+
+
 class EventLog:
     """SQLite-backed append-only log. Every payload passes `redact_event`."""
 
@@ -203,31 +234,8 @@ class EventLog:
         return total
 
     def escalations(self, *, limit: int = 50) -> list[dict[str, Any]]:
-        """Projection: structured handoffs, newest first — the human's queue.
-
-        The event log is the queue of record (ADR-0007). `rowid` breaks a `ts`
-        tie so two escalations written in the same second keep their order.
-        """
-        rows = self._db.execute(
-            "SELECT e.run_id, e.ts, e.payload, r.session_id, r.model, s.title"
-            " FROM run_events e JOIN runs r ON r.run_id = e.run_id"
-            " LEFT JOIN sessions s ON s.session_id = r.session_id"
-            " WHERE e.type = 'escalation'"
-            " ORDER BY e.ts DESC, e.rowid DESC LIMIT ?",
-            (limit,),
-        )
-        out: list[dict[str, Any]] = []
-        for row in rows:
-            payload = json.loads(row["payload"])
-            out.append({
-                **payload,
-                "run_id": row["run_id"],
-                "session_id": row["session_id"],
-                "session_title": row["title"],
-                "model": row["model"],
-                "ts": row["ts"],
-            })
-        return out
+        """Projection: structured handoffs, newest first — the human's queue."""
+        return project_escalations(self._db, limit)
 
     def export_jsonl(self, run_id: str, path: str | Path | None = None) -> Path:
         """The replayable transcript. `--replay` consumes exactly this file."""

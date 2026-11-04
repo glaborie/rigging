@@ -144,6 +144,42 @@ def test_the_page_renders_markdown_tables_and_escapes_html(tmp_path):
             browser.close()
 
 
+def test_the_page_lists_escalations_and_opens_them(tmp_path):
+    """The web queue: the tab lists the handoff, clicking it opens the run."""
+    log, run_id = _finished_run(tmp_path)
+    log.append(run_id, "escalation", {
+        "reason": "customer_requested",
+        "summary": "Wants a human to place the basket order",
+        "facts": {"basket_id": "b_1be7fa75"},
+        "transcript_run_id": run_id,
+    })
+    with _Server(str(log.path), _free_port()) as base_url, sync_playwright() as play:
+        try:
+            browser = play.chromium.launch()
+        except PlaywrightError as exc:  # no Chromium downloaded
+            pytest.skip(f"chromium is not installed: {exc}")
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        try:
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.click("#tab-esc")
+            page.wait_for_selector(".esc", timeout=10_000)
+            listing = page.inner_text("#escalations")
+            assert "customer_requested" in listing
+            assert "browser smoke" in listing
+            assert "facts: basket_id" in listing
+
+            page.click(".esc")
+            page.wait_for_selector(".note", timeout=10_000)
+            note = page.inner_text(".note")
+            assert "escalated · customer_requested" in note
+            assert "b_1be7fa75" in note
+            assert errors == [], f"the page raised: {errors}"
+        finally:
+            browser.close()
+
+
 def test_the_page_can_run_a_turn_and_approve_it(tmp_path):
     """ADR-0023 end to end: type, run, approve, see the tool result.
 

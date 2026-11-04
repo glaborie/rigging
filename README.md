@@ -162,7 +162,12 @@ The left column lists runs; picking one shows the session's earlier turns and th
 follows the selected run live over SSE (`/api/runs/{id}/stream`). The transcript
 is built from events — user and agent bubbles, one card per tool call with its
 arguments and result, a guardrail line per hook, and a footer with the model
-turns and token counts. `raw events` switches to the unfiltered log.
+turns and token counts. `raw events` switches to the unfiltered log. Agent answers
+render as markdown, including tables.
+
+The **escalations** tab in that column is the human queue: reason, session,
+summary and fact keys for each handoff (`GET /api/escalations`), and clicking a
+row opens the run, where the transcript shows the escalation note and its facts.
 
 **Read-only is the default.** Without `--manifest` there is no write route at
 all: no POST, no launch, no approval. That is still the whole of ADR-0018.

@@ -120,8 +120,9 @@ CREATE TABLE runs     (run_id TEXT PRIMARY KEY, session_id TEXT, started_at REAL
 
 Derived views: `messages` (from `input_received`, `model_response`, `tool_result`),
 `verdicts` (from `*_verdict`), `usage` (from `model_response.usage`),
-`escalations` (from `escalation`, joined to its run and session, for
-`harness escalations`), and the replayable transcript exported to `runs/<id>.jsonl`.
+`escalations` (from `escalation`, joined to its run and session; served by
+`harness escalations` and `GET /api/escalations`), and the replayable transcript
+exported to `runs/<id>.jsonl`.
 
 `run_finished` is written exactly once on every exit path — `ok`, `denied`,
 `budget_exhausted` and `error` — so the log alone says how a run ended.

@@ -25,6 +25,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from rigging.events import project_escalations
 from rigging.service.chat import ChatRunner
 from rigging.service.ratelimit import RateLimiter
 
@@ -87,6 +88,12 @@ def session_runs(db: str | Path, session_id: str) -> list[dict[str, Any]]:
             " ORDER BY r.started_at, r.run_id",
             (session_id,),
         )
+
+
+def escalations(db: str | Path, limit: int = 50) -> list[dict[str, Any]]:
+    """Handoffs waiting for a human, newest first — the same projection as the CLI."""
+    with closing(_connect(db)) as conn:
+        return project_escalations(conn, limit)
 
 
 def _session_running(db: str | Path, session_id: str) -> bool:
@@ -350,6 +357,10 @@ def create_app(
     def list_runs(limit: int = 20) -> dict[str, Any]:
         return {"runs": runs(db, max(1, min(limit, 100)))}
 
+    @app.get("/api/escalations", dependencies=guard)
+    def list_escalations(limit: int = 50) -> dict[str, Any]:
+        return {"escalations": escalations(db, limit)}
+
     @app.get("/api/config", dependencies=guard)
     def config() -> dict[str, Any]:
         """What the page may do: chat needs a manifest and a token (ADR-0023)."""
@@ -436,14 +447,29 @@ INDEX_HTML = r"""<!doctype html>
   header span { color: var(--dim); font-size: 12px; }
   main { display: grid; grid-template-columns: 300px 1fr; height: calc(100vh - 53px); }
   aside { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  #tabs { display: flex; gap: 6px; padding: 8px 8px 0; }
+  .tab { flex: 1; padding: 5px 8px; background: transparent; color: var(--dim);
+         border: 1px solid var(--line); border-radius: 6px; font: inherit;
+         font-size: 12px; cursor: pointer; }
+  .tab:hover { border-color: var(--dim); }
+  .tab.active { color: var(--ink); background: var(--panel); }
+  .tab .count { color: var(--warn); }
   #new { margin: 8px; padding: 7px 10px; background: var(--panel); color: var(--ink);
          border: 1px solid var(--line); border-radius: 6px; cursor: pointer; font: inherit; }
   #new:hover { border-color: var(--dim); }
   #runs { overflow: auto; padding: 0 8px 8px; flex: 1; }
+  #escalations { overflow: auto; padding: 0 8px 8px; flex: 1; }
+  #runs[hidden], #escalations[hidden] { display: none; }
   .run { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
   .run:hover { background: var(--panel); }
   .run[aria-current="true"] { background: var(--panel); outline: 1px solid var(--line); }
   .run small { color: var(--dim); display: block; font-variant-numeric: tabular-nums; }
+  .esc { padding: 8px 10px; border-radius: 6px; cursor: pointer; }
+  .esc:hover { background: var(--panel); }
+  .esc[aria-current="true"] { background: var(--panel); outline: 1px solid var(--line); }
+  .esc .reason { color: var(--warn); font-weight: 600; font-size: 12px; }
+  .esc small { color: var(--dim); display: block; overflow: hidden;
+               text-overflow: ellipsis; white-space: nowrap; }
   .pill { font-size: 11px; padding: 1px 7px; border-radius: 99px; border: 1px solid var(--line); }
   .ok { color: var(--accent); } .running { color: var(--warn); } .bad { color: var(--bad); }
   section { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
@@ -520,8 +546,13 @@ INDEX_HTML = r"""<!doctype html>
 </header>
 <main>
   <aside>
+    <div id="tabs">
+      <button id="tab-runs" class="tab active" type="button">runs</button>
+      <button id="tab-esc" class="tab" type="button">escalations <span id="esc-count" class="count"></span></button>
+    </div>
     <button id="new" type="button">+ new session</button>
     <div id="runs"><p class="empty">loading runs…</p></div>
+    <div id="escalations" hidden><p class="empty">loading escalations…</p></div>
   </aside>
   <section>
     <div id="meta"><span>pick a run</span></div>
@@ -535,6 +566,10 @@ INDEX_HTML = r"""<!doctype html>
 </main>
 <script nonce="__CSP_NONCE__">
 const runsEl = document.getElementById('runs');
+const escEl = document.getElementById('escalations');
+const escCount = document.getElementById('esc-count');
+const tabRuns = document.getElementById('tab-runs');
+const tabEsc = document.getElementById('tab-esc');
 const viewEl = document.getElementById('view');
 const metaEl = document.getElementById('meta');
 const modeEl = document.getElementById('mode');
@@ -548,6 +583,7 @@ let streamController = null;
 let config = { chat: false, manifest: null, model: null };
 let currentRun = null, currentSession = null, currentStatus = null;
 let events = [], showRaw = false, busy = false;
+let panel = 'runs';
 
 const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
 
@@ -805,8 +841,52 @@ async function loadRuns() {
   }));
 }
 
+async function loadEscalations() {
+  let res;
+  try { res = await api('/api/escalations?limit=50'); }
+  catch {
+    escEl.innerHTML = '<p class="empty">could not load escalations — unauthorized, or the server is gone.</p>';
+    return;
+  }
+  if (!res.ok) {
+    escEl.innerHTML = '<p class="empty">unauthorized — reload the page and enter the token</p>';
+    return;
+  }
+  const { escalations } = await res.json();
+  escCount.textContent = escalations.length ? String(escalations.length) : '';
+  if (!escalations.length) {
+    escEl.innerHTML = '<p class="empty">no handoffs waiting</p>';
+    return;
+  }
+  escEl.replaceChildren(...escalations.map((e) => {
+    const node = el('div', 'esc');
+    const facts = e.facts && Object.keys(e.facts).length
+      ? `<small>facts: ${esc(Object.keys(e.facts).join(', '))}</small>` : '';
+    node.innerHTML = `<div><span class="reason">${esc(e.reason || 'unknown')}</span></div>
+      <small>${esc(e.session_title || 'untitled')} · ${esc(e.run_id)}</small>
+      <small>${esc((e.summary || '').split('\n')[0])}</small>
+      ${facts}
+      <small>${new Date(e.ts * 1000).toLocaleString()}</small>`;
+    node.dataset.run = e.run_id;
+    node.addEventListener('click', () => openRun(e.run_id, { append: false }));
+    if (e.run_id === currentRun) node.setAttribute('aria-current', 'true');
+    return node;
+  }));
+}
+
+function selectPanel(name) {
+  panel = name;
+  const onRuns = name === 'runs';
+  tabRuns.classList.toggle('active', onRuns);
+  tabEsc.classList.toggle('active', !onRuns);
+  runsEl.hidden = !onRuns;
+  escEl.hidden = onRuns;
+  if (onRuns) loadRuns(); else loadEscalations();
+}
+
 function newSession() {
   if (streamController) streamController.abort();
+  if (panel !== 'runs') selectPanel('runs');
   currentRun = null; currentSession = null; currentStatus = null;
   events = [];
   metaEl.replaceChildren(el('span', '', 'new session'));
@@ -986,9 +1066,13 @@ function renderAll() {
       case 'approval_verdict':
         nodes.push(verdictCard(ev));
         break;
-      case 'escalation':
-        nodes.push(el('div', 'note', `escalated · ${p.reason || ''} — ${p.summary || ''}`));
+      case 'escalation': {
+        const facts = p.facts && Object.keys(p.facts).length
+          ? ` · facts ${JSON.stringify(p.facts)}` : '';
+        nodes.push(el('div', 'note',
+          `escalated · ${p.reason || ''} — ${p.summary || ''}${facts}`));
         break;
+      }
       case 'error':
         nodes.push(el('div', 'note', `error · ${p.error || ''}`));
         break;
@@ -1045,6 +1129,9 @@ async function openRun(runId, opts) {
   if (!append) events = [];
   if (streamController) streamController.abort();
   [...runsEl.children].forEach((node) =>
+    node.dataset.run === runId ? node.setAttribute('aria-current', 'true')
+                              : node.removeAttribute('aria-current'));
+  [...escEl.children].forEach((node) =>
     node.dataset.run === runId ? node.setAttribute('aria-current', 'true')
                               : node.removeAttribute('aria-current'));
   renderAll();
@@ -1107,6 +1194,7 @@ function handleFrame(frame) {
   if (event === 'end') {
     setBusy(false);
     loadRuns();
+    if (panel === 'escalations') loadEscalations();
     return false;
   }
   if (data.length) {
@@ -1153,8 +1241,10 @@ promptEl.addEventListener('keydown', (e) => {
 });
 
 document.getElementById('new').addEventListener('click', newSession);
+tabRuns.addEventListener('click', () => selectPanel('runs'));
+tabEsc.addEventListener('click', () => selectPanel('escalations'));
 
-loadConfig().then(() => { loadRuns(); if (config.chat) promptEl.focus(); });
+loadConfig().then(() => { selectPanel('runs'); if (config.chat) promptEl.focus(); });
 </script>
 </html>
 """

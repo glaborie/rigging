@@ -62,6 +62,19 @@ def test_runs_endpoint_lists_the_run_with_its_session(tmp_path):
     assert payload["runs"][0]["status"] == "ok"
 
 
+def test_escalations_endpoint_lists_handoffs(tmp_path):
+    log, run_id = _finished_run(tmp_path)
+    log.append(run_id, "escalation", {
+        "reason": "customer_requested", "summary": "needs a human",
+        "facts": {"order_id": "ORD-1002"}, "transcript_run_id": run_id,
+    })
+    payload = _client(tmp_path, log).get("/api/escalations").json()["escalations"]
+    assert payload[0]["run_id"] == run_id
+    assert payload[0]["reason"] == "customer_requested"
+    assert payload[0]["facts"] == {"order_id": "ORD-1002"}
+    assert payload[0]["session_title"] == "demo agent"
+
+
 def test_events_endpoint_is_the_log_in_order(tmp_path):
     log, run_id = _finished_run(tmp_path)
     payload = _client(tmp_path, log).get(f"/api/runs/{run_id}").json()
@@ -111,7 +124,7 @@ def test_the_service_never_writes(tmp_path):
     log, run_id = _finished_run(tmp_path)
     app = create_app(log.path)
     assert {route.path for route in app.routes if hasattr(route, "methods")} == {
-        "/", "/api/runs", "/api/config", "/api/runs/{run_id}",
+        "/", "/api/runs", "/api/escalations", "/api/config", "/api/runs/{run_id}",
         "/api/sessions/{session_id}", "/api/runs/{run_id}/stream",
     }
     assert all(route.methods == {"GET"} for route in app.routes if hasattr(route, "methods"))
