@@ -9,10 +9,10 @@ It exercises every layer of the harness at once:
 
 | Layer | How this example exercises it |
 |---|---|
-| tools | 5 tools, one of them `side_effecting` (`refund_order`) |
+| tools | 7 tools, one of them `side_effecting` (`refund_order`) |
 | registry | all capabilities resolved by name from the manifest |
 | skills | two skills, index-only in the prompt, body fetched by `load_skill` |
-| retrieval | policies via Qdrant (`search_policies`) |
+| retrieval | policies via FTS5 (`search_policies`; Qdrant is the upgrade path) |
 | guardrails | PII on input/output, injection on tool results, approval threshold, commitment check |
 | approval | `refund_order` cannot run without an operator answer |
 | escalation | `escalate_to_human` produces a structured handoff |

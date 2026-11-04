@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from pathlib import Path
 
@@ -51,6 +52,24 @@ def test_lookup_and_pricing(demo_db):
     assert '"tier_note"' in pricing  # 85% tier applies at 250 units
 
 
+def test_search_catalogue_by_name_and_sku(demo_db):
+    by_name = json.loads(_call("search_catalogue", {"query": "switch"}))
+    assert by_name["returned"] >= 2
+    assert all("switch" in p["name"].lower() for p in by_name["products"])
+
+    exact = json.loads(_call("search_catalogue", {"query": "SW-24P-GBE"}))
+    assert exact["products"][0]["sku"] == "SW-24P-GBE"  # an exact SKU ranks first
+
+    limited = json.loads(_call("search_catalogue", {"query": "", "limit": 3}))
+    assert limited["returned"] == 3
+
+    miss = json.loads(_call("search_catalogue", {"query": "definitely-not-a-product"}))
+    assert miss["returned"] == 0 and "hint" in miss
+
+    literal = json.loads(_call("search_catalogue", {"query": "%"}))
+    assert literal["returned"] == 0  # LIKE wildcards are escaped, not expanded
+
+
 def test_refund_is_marked_side_effecting(demo_db):
     ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "refund_order"))
     assert getattr(ft, "side_effecting", False) is True
@@ -69,16 +88,16 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
     d = tmp_path / "b2b.yaml"
     d.write_text(yaml.safe_dump({
         "name": "b2b", "model": "test", "system_prompt": "be terse",
-        "tools": ["search_policies", "lookup_order", "check_pricing", "refund_order",
-                  "escalate_to_human"],
+        "tools": ["search_policies", "lookup_order", "search_catalogue", "check_pricing",
+                  "refund_order", "escalate_to_human"],
         "retriever": {"name": "fts5", "options": {}},
         "limits": {"max_steps": 3},
     }))
     spec = load_manifest(str(d))
     agent = assemble(spec, client=FakeClient([]))
     names = {t.name for t in agent.tools}
-    assert {"search_policies", "lookup_order", "check_pricing", "refund_order",
-            "escalate_to_human"} <= names
+    assert {"search_policies", "lookup_order", "search_catalogue", "check_pricing",
+            "refund_order", "escalate_to_human"} <= names
 
 
 def test_search_policies_finds_refund_window(demo_db):

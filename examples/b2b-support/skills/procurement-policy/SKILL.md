@@ -5,7 +5,8 @@ description: How to reason about MOQ, tier pricing, lead times and approvals for
 
 # Procurement reasoning
 
-When a customer asks about buying at volume, resolve in this order:
+When a customer asks about buying at volume, start with `search_catalogue(query)`
+if they named a product but not a SKU, then resolve in this order:
 
 1. **Minimum order quantity** — every SKU has an `moq`. Below MOQ there is no sale;
    offer the MOQ or an alternative SKU. Never invent a smaller quantity.

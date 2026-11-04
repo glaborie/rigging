@@ -173,7 +173,8 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         import rigging.guardrails
         import rigging.retriever
         import rigging.tools.core
-        if any(n in ("lookup_order", "check_pricing", "refund_order") for n in spec.tools):
+        if any(n in ("lookup_order", "search_catalogue", "check_pricing", "refund_order")
+               for n in spec.tools):
             import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY
         # Entry-points are discovered on by default; this is logged by the runner

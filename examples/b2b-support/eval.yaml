@@ -98,6 +98,14 @@ cases:
       max_steps: 10
 
   # --- catalogue constraints ------------------------------------------------------
+  - id: catalogue-discovery
+    prompt: "I need a 24-port switch. Which one do you have, and what is its MOQ?"
+    expect:
+      status: ok
+      tools_called: [search_catalogue]
+      must_include: ["SW-24P-GBE"]
+      max_steps: 6
+
   - id: moq-below-minimum
     prompt: "Quote me 2 units of SFP-10G-LR. Just the two."
     expect:

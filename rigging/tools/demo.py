@@ -54,6 +54,29 @@ def lookup_order(order_id: str) -> str:
 
 
 @tool()
+def search_catalogue(query: str = "", limit: int = 10) -> str:
+    """Search the product catalogue by SKU or name; an empty query browses the first items."""
+    limit = max(1, min(int(limit), 50))
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    with closing(_db()) as db:
+        rows = db.execute(
+            "SELECT sku, name, list_price, moq, lead_days, stock FROM products"
+            " WHERE sku LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\'"
+            " ORDER BY CASE WHEN lower(sku)=lower(?) THEN 0 ELSE 1 END, sku"
+            " LIMIT ?",
+            (pattern, pattern, query, limit),
+        ).fetchall()
+    products = [dict(r) for r in rows]
+    payload: dict[str, object] = {
+        "query": query, "returned": len(products), "products": products,
+    }
+    if not products:
+        payload["hint"] = "No match. Try a shorter product name or a SKU prefix."
+    return json.dumps(payload, indent=1)
+
+
+@tool()
 def check_pricing(sku: str, qty: int) -> str:
     """Price a quantity of a SKU: unit price at the volume tier, MOQ, lead time, stock."""
     with closing(_db()) as db:

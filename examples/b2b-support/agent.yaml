@@ -15,6 +15,7 @@ skills:
 tools:
   - search_policies
   - lookup_order
+  - search_catalogue
   - check_pricing
   - refund_order
   - load_skill
