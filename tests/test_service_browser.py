@@ -31,12 +31,12 @@ from rigging.service import create_app
 pytestmark = pytest.mark.browser
 
 
-def _finished_run(tmp_path) -> tuple[EventLog, str]:
+def _finished_run(tmp_path, content: str = "hi") -> tuple[EventLog, str]:
     log = EventLog(tmp_path / "runs.db")
     session_id = log.start_session(title="browser smoke")
     run_id = log.start_run(session_id=session_id, model="fake", spec_hash="abc")
     log.append(run_id, "input_received", {"content": "hello"})
-    log.append(run_id, "model_response", {"content": "hi", "usage": {"input_tokens": 3}})
+    log.append(run_id, "model_response", {"content": content, "usage": {"input_tokens": 3}})
     log.append(run_id, "run_finished", {"status": "ok"})
     log.finish_run(run_id, "ok")
     return log, run_id
@@ -90,6 +90,53 @@ def test_the_page_renders_the_run_list(tmp_path):
             page.wait_for_selector(".run", timeout=10_000)
             assert run_id in page.inner_text("#runs")
             assert "browser smoke" in page.inner_text("#runs")
+            assert errors == [], f"the page raised: {errors}"
+            violations = [m for m in console if "Content Security Policy" in m]
+            assert violations == [], f"the CSP blocked the page's own code: {violations}"
+        finally:
+            browser.close()
+
+
+def test_the_page_renders_markdown_tables_and_escapes_html(tmp_path):
+    """A model answer is markdown, but it is also untrusted input."""
+    content = (
+        "Here is the quote:\n\n"
+        "| SKU | Qty | Unit |\n"
+        "|-----|----:|-----:|\n"
+        "| SFP-10G-LR | 10 | `122.55` |\n"
+        "| **SW-24P-GBE** | 2 | 289.00 |\n\n"
+        "**Subtotal:** 1803.50\n\n"
+        "<script>window.__pwned = 1</script>\n"
+    )
+    log, run_id = _finished_run(tmp_path, content)
+    with _Server(str(log.path), _free_port()) as base_url, sync_playwright() as play:
+        try:
+            browser = play.chromium.launch()
+        except PlaywrightError as exc:  # no Chromium downloaded
+            pytest.skip(f"chromium is not installed: {exc}")
+        page = browser.new_page()
+        errors: list[str] = []
+        console: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        page.on("console", lambda msg: console.append(msg.text))
+        try:
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.click(f".run[data-run='{run_id}']")
+            page.wait_for_selector(".md table", timeout=10_000)
+
+            assert page.locator(".md table").count() == 1
+            assert "SKU" in page.locator(".md th").first.inner_text()
+            assert page.locator(".md th.right").count() == 2  # Qty and Unit
+            assert "SFP-10G-LR" in page.inner_text(".md table")
+            assert "SW-24P-GBE" in page.inner_text(".md table")
+            assert page.locator(".md strong").count() >= 1
+            assert page.locator(".md code").count() >= 1
+
+            # The script tag was escaped, not executed or parsed as an element.
+            assert page.locator(".md script").count() == 0
+            assert page.evaluate("() => window.__pwned") is None
+            assert "<script>" in page.inner_text(".md")
+
             assert errors == [], f"the page raised: {errors}"
             violations = [m for m in console if "Content Security Policy" in m]
             assert violations == [], f"the CSP blocked the page's own code: {violations}"

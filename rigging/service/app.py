@@ -464,6 +464,28 @@ INDEX_HTML = r"""<!doctype html>
          white-space: pre-wrap; word-break: break-word; }
   .user { background: var(--user); border: 1px solid var(--line); margin-left: auto; }
   .agent { background: transparent; border: 1px solid var(--line); }
+  .msg.md { white-space: normal; }
+  .md p { margin: 0 0 8px; }
+  .md p:last-child { margin-bottom: 0; }
+  .md h3, .md h4, .md h5, .md h6 { margin: 12px 0 6px; font-size: 1.05em; }
+  .md ul, .md ol { margin: 0 0 8px; padding-left: 22px; }
+  .md li { margin: 2px 0; }
+  .md code { background: #0c1116; border: 1px solid var(--line); border-radius: 4px;
+             padding: 1px 4px; font: 12px ui-monospace, monospace; }
+  .md pre { margin: 0 0 8px; padding: 10px 12px; overflow: auto; background: #0c1116;
+            border: 1px solid var(--line); border-radius: 6px; }
+  .md pre code { padding: 0; border: 0; background: transparent; }
+  .md blockquote { margin: 0 0 8px; padding-left: 10px; border-left: 2px solid var(--line);
+                   color: var(--dim); }
+  .md a { color: #8ab4f8; }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: 10px 0; }
+  .table-wrap { overflow-x: auto; margin: 8px 0; }
+  .md table { border-collapse: collapse; font-size: 13px; }
+  .md th, .md td { border: 1px solid var(--line); padding: 4px 9px; text-align: left;
+                   vertical-align: top; }
+  .md th { background: var(--panel); font-weight: 600; }
+  .md .right { text-align: right; }
+  .md .center { text-align: center; }
   .card { max-width: 88ch; margin: 0 0 10px; border: 1px solid var(--line);
           border-radius: 8px; background: var(--call); overflow: hidden; }
   .card > .head { display: flex; gap: 8px; align-items: baseline; padding: 7px 11px;
@@ -570,6 +592,167 @@ function el(tag, cls, text) {
   return node;
 }
 
+// ------------------------------------------------------------------ markdown
+// Agent output is untrusted. Escape it first, then add only the tags below; no
+// HTML from the response reaches the DOM, and alignment is a class because the
+// CSP nonce allows the page's <style> but not inline style attributes.
+const INLINE_SLOT = /\u0000(\d+)\u0000/g;
+
+function inlineMd(text) {
+  const code = [];
+  let out = esc(text).replace(/`([^`\n]+)`/g, (_, value) => {
+    code.push(value);
+    return `\u0000${code.length - 1}\u0000`;
+  });
+  out = out.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
+  out = out.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>');
+  out = out.replace(/~~([^~\n]+)~~/g, '<s>$1</s>');
+  out = out.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+    '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+  return out.replace(INLINE_SLOT, (_, index) => `<code>${code[Number(index)]}</code>`);
+}
+
+const splitRow = (line) => {
+  let row = line.trim();
+  if (row.startsWith('|')) row = row.slice(1);
+  if (row.endsWith('|')) row = row.slice(0, -1);
+  return row.split('|').map((cell) => cell.trim());
+};
+
+const isTableSep = (line) => {
+  const cells = splitRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
+};
+
+const alignOf = (sep) => (sep.startsWith(':') && sep.endsWith(':') ? 'center'
+  : sep.endsWith(':') ? 'right' : sep.startsWith(':') ? 'left' : '');
+
+function markdownTable(header, aligns, rows) {
+  const table = el('table');
+  const thead = el('thead');
+  const head = el('tr');
+  header.forEach((cell, index) => {
+    const th = el('th', aligns[index] || '');
+    th.innerHTML = inlineMd(cell);
+    head.appendChild(th);
+  });
+  thead.appendChild(head);
+  table.appendChild(thead);
+  const body = el('tbody');
+  rows.forEach((row) => {
+    const tr = el('tr');
+    header.forEach((_cell, index) => {
+      const td = el('td', aligns[index] || '');
+      td.innerHTML = inlineMd(row[index] || '');
+      tr.appendChild(td);
+    });
+    body.appendChild(tr);
+  });
+  table.appendChild(body);
+  const wrap = el('div', 'table-wrap');
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderMarkdown(text) {
+  const frag = document.createDocumentFragment();
+  const lines = String(text ?? '').replace(/\r\n?/g, '\n').split('\n');
+  let i = 0;
+  let para = [];
+
+  const flush = () => {
+    if (!para.length) return;
+    const node = el('p');
+    node.innerHTML = inlineMd(para.join(' '));
+    frag.appendChild(node);
+    para = [];
+  };
+
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { flush(); i += 1; continue; }
+
+    const fence = /^```(\w*)\s*$/.exec(line);
+    if (fence) {
+      flush();
+      const body = [];
+      i += 1;
+      while (i < lines.length && !/^```\s*$/.test(lines[i])) body.push(lines[i++]);
+      if (i < lines.length) i += 1;
+      const pre = el('pre');
+      pre.appendChild(el('code', fence[1] ? `language-${fence[1]}` : '', body.join('\n')));
+      frag.appendChild(pre);
+      continue;
+    }
+
+    if (line.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1])) {
+      flush();
+      const header = splitRow(line);
+      const aligns = splitRow(lines[i + 1]).map(alignOf);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].includes('|') && lines[i].trim()) {
+        rows.push(splitRow(lines[i]));
+        i += 1;
+      }
+      frag.appendChild(markdownTable(header, aligns, rows));
+      continue;
+    }
+
+    const heading = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (heading) {
+      flush();
+      const node = el(`h${Math.min(heading[1].length + 2, 6)}`);
+      node.innerHTML = inlineMd(heading[2]);
+      frag.appendChild(node);
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*([-*_])(\s*\1){2,}\s*$/.test(line)) {
+      flush();
+      frag.appendChild(el('hr'));
+      i += 1;
+      continue;
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      flush();
+      const quoted = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quoted.push(lines[i].replace(/^\s*>\s?/, ''));
+        i += 1;
+      }
+      const node = el('blockquote');
+      node.innerHTML = inlineMd(quoted.join(' '));
+      frag.appendChild(node);
+      continue;
+    }
+
+    const item = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(line);
+    if (item) {
+      flush();
+      const ordered = /\d/.test(item[1]);
+      const list = el(ordered ? 'ol' : 'ul');
+      while (i < lines.length) {
+        const next = /^\s*([-*+]|\d+[.)])\s+(.*)$/.exec(lines[i]);
+        if (!next || /\d/.test(next[1]) !== ordered) break;
+        const li = el('li');
+        li.innerHTML = inlineMd(next[2]);
+        list.appendChild(li);
+        i += 1;
+      }
+      frag.appendChild(list);
+      continue;
+    }
+
+    para.push(line);
+    i += 1;
+  }
+  flush();
+  return frag;
+}
+
 function setBusy(value) {
   busy = value;
   sendEl.disabled = value;
@@ -639,7 +822,11 @@ const lastIndexOf = (type) => {
 };
 
 function userBubble(text) { return el('div', 'msg user', text); }
-function agentBubble(text) { return el('div', 'msg agent', text); }
+function agentBubble(text) {
+  const node = el('div', 'msg agent md');
+  node.appendChild(renderMarkdown(text));
+  return node;
+}
 
 function callCard(call) {
   const card = el('div', 'card');
