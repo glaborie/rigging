@@ -13,7 +13,7 @@ from typing import Any
 import httpx
 
 from rigging.config import Settings
-from rigging.decide.systemone import build_questions, map_answers, post_json
+from rigging.decide.systemone import decide_via, post_json
 from rigging.protocols import DecisionAnswer
 from rigging.registry import decision_model
 
@@ -42,10 +42,7 @@ class OllamaD1Omni:
         self, state: str, questions: dict[str, Sequence[str]]
     ) -> dict[str, DecisionAnswer]:
         """Return Ollama's choice and per-option probabilities."""
-        wire_questions, question_ids = build_questions(questions)
-        payload = {"model": self.model_id, "state": state, "questions": wire_questions}
-        body = self.send(payload)
-        return map_answers(body, question_ids, provider="Ollama")
+        return decide_via(self, "Ollama", self.model_id, state, questions)
 
     def send(self, payload: dict[str, Any]) -> Any:
         return post_json(

@@ -176,12 +176,3 @@ class Exporter(Protocol):
     def end_span(self, span: Any, attributes: dict[str, Any] | None = None) -> None: ...
 
     def close(self) -> None: ...
-
-
-# --------------------------------------------------------------------------- scale-out (v0.6)
-
-@runtime_checkable
-class SubagentRunner(Protocol):
-    """Not implemented in v1. The slot and `parent_run_id` exist so it stays additive."""
-
-    def spawn(self, manifest_path: str, task: str, *, parent_run_id: str) -> Any: ...

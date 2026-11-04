@@ -30,3 +30,8 @@ the CLI needs a `--show-reasoning` flag rather than dumping it by default.
 Treating reasoning as part of `content`: pollutes transcripts and breaks
 tool-call parsing. Dropping it entirely: cheap, but loses the single best
 debugging artifact a reasoning model produces.
+
+**Correction (v0.7 cleanup):** deltas are streamed to the caller and accumulated
+into one `model_response` event; logging every token would bloat the log, and the
+loop never did it. `model_delta` and `reasoning_delta` were removed from the event
+contract.

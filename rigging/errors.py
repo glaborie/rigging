@@ -32,25 +32,5 @@ class TransportError(RiggingError):
         super().__init__(f"gateway error status={status} attempts={attempts}: {body[:300]}")
 
 
-class ToolError(RiggingError):
-    """A tool raised. The loop converts this into an `is_error` tool message."""
-
-
-class GuardrailDenied(RiggingError):
-    """An input or output guardrail denied. The run ends; a tool-call denial does not."""
-
-    def __init__(self, guardrail: str, reason: str) -> None:
-        self.guardrail, self.reason = guardrail, reason
-        super().__init__(f"{guardrail} denied: {reason}")
-
-
-class ApprovalDenied(RiggingError):
-    """A side-effecting tool call was not approved. Becomes a tool message, not a crash."""
-
-
-class BudgetExhausted(RiggingError):
-    """Limits were hit and the model still would not conclude."""
-
-    def __init__(self, reason: str, run_id: str) -> None:
-        self.reason, self.run_id = reason, run_id
-        super().__init__(f"budget exhausted ({reason}) in run {run_id}")
+# The loop returns a `RunResult` for denial, budget exhaustion and gateway
+# failure; it does not raise. Only errors a caller must handle stay here.

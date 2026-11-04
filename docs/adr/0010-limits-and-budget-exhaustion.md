@@ -29,3 +29,8 @@ documented, and the wall-clock limit covers the hang case.
 Hard raise: rejected, loses the conversation. Advisory-only limits: rejected, an
 unbounded agent. Local tokenizer pre-estimation (`tiktoken`): rejected — wrong for
 non-OpenAI models, and provider `usage` is authoritative.
+
+**Correction (v0.7 cleanup):** the structured failure is
+`RunResult(status="budget_exhausted", error=...)` carrying the partial transcript,
+not a raised `BudgetExhausted`; the loop returns outcomes for denial, exhaustion
+and gateway failure, and raises only what a caller must handle.

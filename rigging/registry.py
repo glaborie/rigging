@@ -11,7 +11,6 @@ from collections.abc import Callable, Iterable
 from typing import Any, TypeVar
 
 from rigging.errors import CapabilityNotFound
-from rigging.protocols import DecisionModel, Guardrail, Retriever, Tool
 
 T = TypeVar("T")
 
@@ -154,7 +153,3 @@ __all__ = [
     "retriever",
     "tool",
 ]
-
-# Protocol conformance is asserted in tests/test_registry.py rather than here, so
-# that this module never imports an implementation.
-_ = (Tool, Guardrail, Retriever, DecisionModel)

@@ -17,17 +17,13 @@ from pathlib import Path
 from typing import Any
 
 from rigging.config import settings
-from rigging.errors import ManifestError, RiggingError
+from rigging.errors import ManifestError
 from rigging.manifest import AgentSpec, SubagentCfg, load_manifest
 from rigging.types import ToolCall, ToolResult
 
 #: A child's answer is pasted into the parent's context; cap it rather than
 #: letting one chatty subagent eat the parent's whole budget.
 MAX_SUMMARY_CHARS = 4000
-
-
-class SubagentError(RiggingError):
-    """A spawn that could not run. Surfaces as an `is_error` tool result."""
 
 
 def resolve_child(parent: AgentSpec, ref: SubagentCfg) -> AgentSpec:

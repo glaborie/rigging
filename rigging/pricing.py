@@ -27,7 +27,7 @@ class PriceTable:
         return model in self._prices
 
     def cost(self, model: str, usage: Usage) -> float | None:
-        """None means "unknown model": the caller logs `cost_unknown` and skips the limit."""
+        """None means "unknown model": the caller skips the USD limit, not the run."""
         price = self._prices.get(model)
         if price is None:
             return None

@@ -53,7 +53,7 @@ a YAML file. Swapping Qdrant for anything else is one class.
 | MCP servers as a tool source | entry point | | | | ● | | | |
 | Manifest JSON Schema + docs | -- | | | | | ● | | |
 | Web widget (read-only, SSE) | extra | | | | | ● | | |
-| Subagents (`SubagentRunner`) | manifest + protocol | | | | | | ● | |
+| Subagents (`spawn_<name>` tools) | manifest + child manifest | | | | | | ● | |
 | FastAPI service + auth (bearer) | extra | | | | | | ● | |
 | Parallel tool execution (opt-in) | manifest flag | | | | | | ● | |
 | Chat + in-page approvals (opt-in) | extra | | | | | | | ● |

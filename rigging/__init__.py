@@ -7,13 +7,9 @@ Public surface, stable enough to build against:
 """
 
 from rigging.errors import (
-    ApprovalDenied,
-    BudgetExhausted,
     CapabilityNotFound,
-    GuardrailDenied,
     ManifestError,
     RiggingError,
-    ToolError,
     TransportError,
 )
 from rigging.registry import Registry, guardrail, retriever, tool
@@ -33,11 +29,8 @@ from rigging.types import (
 __version__ = "0.7.0"
 
 __all__ = [
-    "ApprovalDenied",
-    "BudgetExhausted",
     "CapabilityNotFound",
     "Chunk",
-    "GuardrailDenied",
     "Handoff",
     "ManifestError",
     "Message",
@@ -48,7 +41,6 @@ __all__ = [
     "RiggingError",
     "RunResult",
     "ToolCall",
-    "ToolError",
     "ToolResult",
     "TransportError",
     "Usage",

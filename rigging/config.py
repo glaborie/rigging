@@ -1,4 +1,4 @@
-"""Settings from the environment. Secrets live in .env, never in a manifest (ADR-0028/Q28).
+"""Settings from the environment. Secrets live in .env, never in a manifest.
 
 A manifest names a `credential_profile`; the profile resolves to a base_url + key
 here. Switching gateways is therefore a config change, not a code change.
@@ -77,8 +77,6 @@ class Settings(BaseSettings):
     subagent_max_depth: int = 1
 
     # observability
-    otlp_endpoint: str = ""
-    otlp_headers: str = ""
     # Comma-separated labels sent as `langfuse.trace.tags` on the root span, so a
     # run can be filtered in the UI. `scripts/bench.py` sets this per model and
     # repeat; nothing else needs it.

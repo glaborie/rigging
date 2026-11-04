@@ -49,7 +49,6 @@ that claim seriously: the loop knows about protocols, never about vendors.
 | `Retriever` | `search(query, k) -> list[Chunk]`, `requires_indexing` | Qdrant (default), FTS5 (reference) | v0.3 |
 | `DecisionModel` | `decide(state, questions) -> typed answers + probabilities` | Laya (advisory) | v0.3 |
 | `Exporter` | `span(name, attrs)`, `event(...)` with `gen_ai.*` attrs | OTel→Langfuse, MLflow (run-level), console | v0.4 / v0.6 |
-| `SubagentRunner` | `spawn(spec, task) -> SubagentResult` | `spawn_<name>` tool over `run_agent` (ADR-0019) | v0.6 |
 
 Every protocol is defined in `rigging/protocols.py`, one screen each, with no
 imports from the rest of the package. That rule is what makes the swappability
@@ -78,7 +77,7 @@ for step in range(limits.max_steps):
         messages += tool message
 # budget exhausted
 final = client.complete(request, tools=[])      one last call, tools disabled
-return FinalAnswer(final) or BudgetExhausted(partial=run)
+return RunResult(status="ok"|"budget_exhausted", partial transcript)
 ```
 
 Three invariants fall out of this and are enforced by tests:
@@ -102,11 +101,11 @@ CREATE TABLE run_events (
   seq         INTEGER NOT NULL,
   ts          REAL NOT NULL,
   type        TEXT NOT NULL,   -- run_started | input_received | guardrail_verdict
-                               -- model_request | model_delta | reasoning_delta
-                               -- model_response | tool_batch | tool_call
-                               -- approval_requested | approval_verdict | tool_result
-                               -- budget_check | escalation | output_verdict
-                               -- run_finished | error
+                               -- model_request | model_response | tool_batch
+                               -- tool_call | approval_requested | approval_verdict
+                               -- tool_result | budget_check | escalation
+                               -- output_verdict | run_finished | error
+                               -- gateway_error | sse_malformed
                                -- eval_verdict (written by `harness eval`)
   payload     TEXT NOT NULL,   -- JSON, redacted before insert
   span_id     TEXT,
@@ -164,9 +163,9 @@ For that to be honest, the loop ends the root span on **every** exit path — `o
 | other 4xx | fail the run with the gateway's error body, as an `error` event |
 | malformed SSE event | skip and record `sse_malformed` (never silently drop) |
 | tool exception / bad args | tool message with `is_error: true` |
-| guardrail deny | tool message (tool hook) or run ends with `GuardrailDenied` (input/output hook) |
+| guardrail deny | tool message (tool hook) or `RunResult(status="denied")` (input/output hook) |
 | approval deny | tool message `denied by policy`; the model is told, the user is shown |
-| limits reached | one final call with tools disabled; then `BudgetExhausted` with partial transcript |
+| limits reached | one final call with tools disabled; then `RunResult(status="budget_exhausted")` with the partial transcript |
 | Ctrl-C | `CancelledError` propagates; partial transcript is already durable |
 
 ## 7. Entry-points for third-party capabilities

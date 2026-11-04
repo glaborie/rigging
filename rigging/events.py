@@ -19,13 +19,10 @@ from rigging.types import Message, ToolCall, Usage
 
 EventType = Literal[
     "run_started",
-    "session_started",
     "input_received",
     "guardrail_verdict",
     "budget_check",
     "model_request",
-    "model_delta",
-    "reasoning_delta",
     "model_response",
     "tool_call",
     "tool_batch",
@@ -34,11 +31,11 @@ EventType = Literal[
     "tool_result",
     "escalation",
     "output_verdict",
-    "registry_discovered",
-    "replay_miss",
+    "gateway_error",
     "sse_malformed",
     "error",
     "run_finished",
+    "eval_verdict",
 ]
 
 SCHEMA = """

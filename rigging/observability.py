@@ -32,9 +32,6 @@ from rigging.config import settings
 # live on the root span alone.
 _TRACE_SCOPE_KEYS = (
     "session.id",
-    "langfuse.session.id",
-    "langfuse.user.id",
-    "user.id",
     "langfuse.trace.tags",
 )
 

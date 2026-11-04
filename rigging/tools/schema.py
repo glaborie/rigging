@@ -93,7 +93,3 @@ class FunctionTool:
 
     def __repr__(self) -> str:
         return f"<FunctionTool {self.name}{' side_effecting' if self.side_effecting else ''}>"
-
-
-def wire_tools(tools: Sequence[Any]) -> list[dict[str, Any]]:
-    return [t.json_schema for t in tools]

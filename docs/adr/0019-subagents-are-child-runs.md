@@ -4,9 +4,9 @@
 
 ## Context
 
-`SubagentRunner` has been a protocol slot since v0.1, with `runs.parent_run_id`
-pre-wired and deliberately unused. v0.6 asks for child runs with their own
-manifest and budget. Three things can go wrong, and each has a tempting shortcut:
+`runs.parent_run_id` was pre-wired in v0.1 and deliberately unused. v0.6 asks
+for child runs with their own manifest and budget. Three things can go wrong, and
+each has a tempting shortcut:
 
 1. **A second source of truth.** Running a child in its own process with its own
    log makes the parent's transcript a summary of something invisible.
@@ -69,3 +69,7 @@ tools, guardrails and exporters — cheap locally, not free.
   run actually spent the tokens.
 - **A queue/worker pool**: that is a service concern, and v0.6 keeps the harness
   in-process.
+
+**Correction (v0.7 cleanup):** the unused `SubagentRunner` protocol slot was
+removed. Subagents are implemented as `spawn_<name>` tools over `run_agent`; there
+was never a second implementation for that protocol to swap in.

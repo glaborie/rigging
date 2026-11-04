@@ -1,5 +1,5 @@
 # USD per 1M tokens. ADR-0011: cost = gateway `usage` x these numbers.
-# An unknown model logs a `cost_unknown` event and skips the USD limit.
+# An unknown model has no cost, so the USD limit is skipped (the run still runs).
 # Keep this short and honest; it is not a billing system.
 beam:cloud:
   input: 0.0

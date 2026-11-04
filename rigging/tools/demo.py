@@ -3,7 +3,7 @@
 Registered on the default registry when a manifest asks for them; backed by the
 seeded SQLite fixture DB (`examples/b2b-support/demo.db`, built by seed.py).
 `refund_order` is side-effecting: the consequential-action guardrail and the
-approval policy gate it before this function ever runs (ADR-0004, ADR-0012).
+approval policy gate it before this function ever runs (ADR-0004, ADR-0007).
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 from rigging.registry import DEFAULT_REGISTRY, tool
@@ -45,8 +46,8 @@ def _tier(list_price: float, qty: int) -> float:
 @tool()
 def lookup_order(order_id: str) -> str:
     """Look up a customer order by id (e.g. ORD-1001): items, status, delivery."""
-    db = _db()
-    rows = db.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchall()
+    with closing(_db()) as db:
+        rows = db.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchall()
     if not rows:
         return f"error: no order {order_id!r} in the system"
     return json.dumps([dict(r) for r in rows], indent=1)
@@ -55,8 +56,8 @@ def lookup_order(order_id: str) -> str:
 @tool()
 def check_pricing(sku: str, qty: int) -> str:
     """Price a quantity of a SKU: unit price at the volume tier, MOQ, lead time, stock."""
-    db = _db()
-    row = db.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
+    with closing(_db()) as db:
+        row = db.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
     if not row:
         return f"error: unknown SKU {sku!r}"
     unit = _tier(row["list_price"], qty) * row["list_price"]
@@ -71,14 +72,14 @@ def check_pricing(sku: str, qty: int) -> str:
 @tool(side_effecting=True)
 def refund_order(order_id: str, amount: float, reason: str) -> str:
     """Issue a refund for an order. Requires approval; state the amount explicitly."""
-    db = _db()
-    row = db.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchone()
-    if not row:
-        return f"error: no order {order_id!r} in the system"
-    # The demo DB is immutable: "refunding" records the intent, not money movement.
-    db.execute("UPDATE orders SET note = ? WHERE order_id = ?",
-               (f"refund {_money(amount)} USD: {reason}", order_id))
-    db.commit()
+    with closing(_db()) as db:
+        row = db.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchone()
+        if not row:
+            return f"error: no order {order_id!r} in the system"
+        # The demo DB is immutable: "refunding" records the intent, not money movement.
+        db.execute("UPDATE orders SET note = ? WHERE order_id = ?",
+                   (f"refund {_money(amount)} USD: {reason}", order_id))
+        db.commit()
     return (f"refund approved and recorded for {order_id}: {_money(amount)} USD ({reason}). "
             "Per policy ACC-001 it appears as a credit note on the next invoice.")
 

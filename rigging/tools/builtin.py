@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from typing import Any
 
-from rigging.errors import ManifestError
 from rigging.protocols import SkillResolver, Tool
 from rigging.tools.schema import FunctionTool
 from rigging.types import Handoff
@@ -26,13 +24,17 @@ def make_load_skill_tool(resolver: SkillResolver) -> Tool:
     return FunctionTool(load_skill)
 
 
-def make_escalate_tool(*, run_id_getter: Callable[[], str | None] = lambda: None) -> Tool:
-    """`escalate_to_human` — a normal tool whose result is a structured handoff."""
+def make_escalate_tool() -> Tool:
+    """`escalate_to_human` — a normal tool whose result is a structured handoff.
+
+    The loop fills `transcript_run_id` when it parses the result, so this tool
+    does not need to know the run it belongs to.
+    """
 
     def escalate_to_human(reason: str, summary: str) -> str:
         """Hand the conversation to a human. Use when the request is out of policy,
         too vague to act on, or the customer asks for a person."""
-        handoff = Handoff(reason=reason, summary=summary, transcript_run_id=run_id_getter())
+        handoff = Handoff(reason=reason, summary=summary)
         return f"HANDOFF {handoff.model_dump_json()}"
 
     _tag(escalate_to_human, "escalate_to_human", "Escalate to a human with a structured handoff.")
@@ -55,7 +57,3 @@ def make_search_tool(retriever: Any) -> Tool:
 
 def _tag(fn: Any, name: str, description: str, side_effecting: bool = False) -> None:
     fn.__rigging_tool__ = {"name": name, "description": description, "side_effecting": side_effecting}
-
-
-def make_repo_tool(*_a: Any, **_k: Any) -> Tool:
-    raise ManifestError("not implemented")

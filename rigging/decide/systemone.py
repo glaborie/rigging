@@ -1,14 +1,13 @@
 """Shared SystemOne request/response plumbing for decision-model adapters.
 
 FreeLLMAPI's ``/v1/decisions`` and OpenRouter's ``/api/v1/systemone`` speak the
-same wire contract (ADR-0019): ``model`` + ``state`` + ``questions`` in,
-``answers`` with ``choice``/``probabilities`` out. The adapters are therefore
-thin: identity (model id, base URL, key) plus one ``send()``.
+same wire contract: ``model`` + ``state`` + ``questions`` in, ``answers`` with
+``choice``/``probabilities`` out. The adapters are therefore thin: identity
+(model id, base URL, key) plus one ``send()``.
 """
 
 from __future__ import annotations
 
-import json
 import math
 from collections.abc import Sequence
 from typing import Any, Protocol
@@ -142,5 +141,5 @@ def post_json(
         raise TransportError(response.status_code, response.text, attempts=1)
     try:
         return response.json()
-    except (ValueError, json.JSONDecodeError) as exc:
+    except ValueError as exc:
         raise RiggingError(f"{provider} returned invalid JSON for a decision request") from exc

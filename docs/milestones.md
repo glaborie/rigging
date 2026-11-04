@@ -37,7 +37,7 @@ repo is operated, so it is recorded here:
 ## v0.1 — the loop is real
 
 - [x] `types.py`: Message, ToolCall, ToolResult, Usage, ModelResponse (with `reasoning`)
-- [x] `protocols.py`: LLMClient, Tool, Guardrail, ApprovalPolicy, Retriever, DecisionModel, Exporter, SubagentRunner
+- [x] `protocols.py`: LLMClient, Tool, Guardrail, ApprovalPolicy, Retriever, DecisionModel, Exporter
 - [x] `registry.py`: decorators + `discover_entry_points()` (opt-in)
 - [x] `client/openai_compat.py`: httpx, SSE parser, retries, `usage` mapping, reasoning passthrough
 - [x] `loop.py`: the sequence in `docs/architecture.md` §3, tool errors as messages
@@ -141,7 +141,7 @@ auth (ADR-0021), parallel tool execution (ADR-0022). **Released as v0.6.0
 hardened the exposure (TLS, rate limit, CSP, threat model).** Run [`showcase-v0.6.md`](showcase-v0.6.md) for the
 four commands and the evidence each one leaves.
 
-- [x] `SubagentRunner`: child runs with own manifest/budget, `parent_run_id` wired
+- [x] subagent tools: child runs with own manifest/budget, `parent_run_id` wired
       ADR-0019. `subagents:` in the manifest becomes `spawn_<name>(task)`,
       side-effecting so the approval gate applies; the child is a run in the same
       log and session, with its own model, prompt and limits, isolated history,

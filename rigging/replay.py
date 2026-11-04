@@ -1,8 +1,8 @@
 """Replay: re-run a recorded transcript through the loop with zero network.
 
 `EventLog.export_jsonl()` writes the transcript; `ReplayClient` consumes it
-(A DR-0009: no live API in tests/CI — eval and CI replay recordings instead).
-On mismatch, a `replay_miss` event is the signal, not a silent substitute.
+(ADR-0014: no live API in tests/CI — eval and CI replay recordings instead).
+On mismatch it raises: a shortened transcript is never silently substituted.
 """
 
 from __future__ import annotations
