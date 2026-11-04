@@ -122,14 +122,17 @@ A Langfuse session becomes an [ATIF v1.7](https://docs.nvidia.com/nemo/relay/lat
 trajectory file, which external viewers can open:
 
 ```bash
-make atif SESSION=s_a602a7c7b060      # -> runs/atif/atif-s_a602a7c7b060.json
+make atif SESSION=s_a602a7c7b060                 # one file per run (turn)
+make atif SESSION=s_a602a7c7b060 COMBINE=1       # one file for the whole conversation
 ```
 
 Then drop the file into the OpenHands trajectory visualizer at
-<http://localhost:12000>. One trace is one trajectory: the prompt is a `user`
-step, each model call an `agent` step with its promoted tool calls, each batch
-of tool results a `system` observation step. The conversion is a script, not an
-exporter — `scripts/langfuse_to_atif.py --help`.
+<http://localhost:12000>. One trace is one *run* — one prompt, its model calls
+and tool calls. A session is several runs, so `COMBINE=1` concatenates them into
+a single trajectory: steps and tool-call ids are renumbered, each step keeps the
+`trace_id` it came from, and `extra.rigging.runs` lists the runs with their eval
+verdicts. Without it, a six-turn session writes six files. The conversion is a
+script, not an exporter — `scripts/langfuse_to_atif.py --help`.
 
 The `harbor` CLI wants a job directory rather than a bare file, so `HARBOR=`
 writes that layout too:

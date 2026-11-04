@@ -192,6 +192,49 @@ def test_verdicts_are_read_from_the_event_log_by_run_id(tmp_path) -> None:
     assert mod.load_verdicts(tmp_path / "missing.db") == {}
 
 
+def test_combining_a_session_keeps_one_trajectory_step_order_and_ids() -> None:
+    mod = _mod()
+    first = mod.build_trajectory("s_test", {"id": "tr_a"}, _observations())
+    second = mod.build_trajectory(
+        "s_test", {"id": "tr_b"}, _observations(),
+        verdict={"case": "c2", "passed": True, "failures": []})
+    doc = mod.combine_trajectories([first, second], "s_test")
+
+    assert doc["trajectory_id"] == "s_test"
+    assert doc["schema_version"] == "ATIF-v1.7"
+    assert [s["step_id"] for s in doc["steps"]] == list(range(1, 9))
+    assert [s["extra"]["trace_id"] for s in doc["steps"]] == ["tr_a"] * 4 + ["tr_b"] * 4
+
+    # Call ids are renumbered per trace, and every result still points at its call.
+    calls = {c["tool_call_id"] for s in doc["steps"] for c in s.get("tool_calls") or []}
+    assert len(calls) == 2
+    results = [r for s in doc["steps"]
+               for r in (s.get("observation") or {}).get("results") or []]
+    assert len(results) == 2
+    assert {r["source_call_id"] for r in results} == calls
+
+    assert doc["final_metrics"]["total_steps"] == 8
+    assert doc["final_metrics"]["total_prompt_tokens"] == 300
+    assert doc["final_metrics"]["total_completion_tokens"] == 60
+
+    # One entry per run, in order, with that run's eval verdict.
+    runs = doc["extra"]["rigging"]["runs"]
+    assert [r["run_id"] for r in runs] == ["r_1", "r_1"]
+    assert "eval" not in runs[0] and runs[1]["eval"]["case"] == "c2"
+    assert doc["extra"]["rigging"]["models"] == ["test-model"]
+    assert doc["extra"]["langfuse"]["traces"][0]["trace_id"] == "tr_a"
+
+
+def test_a_combined_document_survives_the_harbor_layout(tmp_path) -> None:
+    mod = _mod()
+    docs = [mod.build_trajectory("s_test", {"id": "tr_a"}, _observations()),
+            mod.build_trajectory("s_test", {"id": "tr_b"}, _observations())]
+    job = mod.write_harbor_layout([("s_test", mod.combine_trajectories(docs, "s_test"))],
+                                  tmp_path / "harbor")
+    trajectory = json.loads((job / "s_test" / "agent" / "trajectory.json").read_text())
+    assert len(trajectory["steps"]) == 8
+
+
 def test_text_and_tool_calls_in_one_generation() -> None:
     """rigging records a text+calls turn as {"content", "tool_calls"}."""
     mod = _mod()

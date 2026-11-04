@@ -2,6 +2,7 @@
 """Convert a Langfuse session into an ATIF v1.7 trajectory file.
 
     uv run python scripts/langfuse_to_atif.py s_a602a7c7b060 --out runs/atif
+    uv run python scripts/langfuse_to_atif.py s_a602a7c7b060 --combine   # one conversation file
     uv run python scripts/langfuse_to_atif.py \
         https://cloud.langfuse.com/project/<project>/sessions/s_a602a7c7b060
     uv run python scripts/langfuse_to_atif.py --trace aba62abeed739799f1385def7999fda1
@@ -21,6 +22,11 @@ Mapping, following NeMo Relay's ATIF semantics
   * each batch of `execute_tool`    -> one `system` step whose `observation.
     spans that follows a generation    results` carry the tool output, linked by
                                        `source_call_id`
+
+A session is several runs, one per turn, and therefore several traces. The
+default is one ATIF file per trace; `--combine` concatenates the session's traces
+into one trajectory (step and tool-call ids renumbered, each step tagged with its
+`trace_id`), which is what a conversation-level viewer wants.
 
 Langfuse's v2 observations endpoint is the only read path: the session endpoint
 that lists a session's traces is deprecated (removal 2026-11-16), so this
@@ -335,6 +341,103 @@ def _package_version() -> str:
         return "unknown"
 
 
+def _doc_start(doc: dict[str, Any]) -> str:
+    times = [str(s.get("timestamp")) for s in doc.get("steps") or [] if s.get("timestamp")]
+    return min(times) if times else ""
+
+
+def combine_trajectories(docs: list[dict[str, Any]],
+                         session_id: str) -> dict[str, Any]:
+    """One ATIF trajectory for a conversation: its traces, in start order.
+
+    A rigging session is several runs (one per turn), and therefore several
+    Langfuse traces. ATIF has no trace container, so the steps are concatenated
+    and every id is renumbered. The run boundaries stay visible: each step's
+    `extra.trace_id` names its trace, and `extra.rigging.runs` keeps one entry
+    per run (including its eval verdict).
+    """
+    ordered = sorted(docs, key=_doc_start)
+    steps: list[dict[str, Any]] = []
+    runs: list[dict[str, Any]] = []
+    traces: list[dict[str, Any]] = []
+    models: list[str] = []
+    system_prompt: str | None = None
+    totals: dict[str, float] = {}
+
+    for index, doc in enumerate(ordered, start=1):
+        mapping: dict[str, str] = {}
+        for step in doc.get("steps") or []:
+            new = {**step}
+            if step.get("tool_calls"):
+                new["tool_calls"] = []
+                for call in step["tool_calls"]:
+                    old_id = str(call.get("tool_call_id"))
+                    renamed = f"t{index}:{old_id}"
+                    mapping[old_id] = renamed
+                    new["tool_calls"].append({**call, "tool_call_id": renamed})
+            if step.get("observation"):
+                new["observation"] = {
+                    **step["observation"],
+                    "results": [
+                        {**result,
+                         "source_call_id": mapping.get(str(result.get("source_call_id")),
+                                                       result.get("source_call_id"))}
+                        for result in step["observation"].get("results") or []
+                    ],
+                }
+            new["step_id"] = len(steps) + 1
+            new["extra"] = {**(step.get("extra") or {}),
+                            "trace_id": doc.get("trajectory_id")}
+            steps.append(new)
+
+        extra = doc.get("extra") or {}
+        rigging = extra.get("rigging") or {}
+        run = {key: rigging[key] for key in ("run_id", "status", "steps", "handoff")
+               if rigging.get(key) is not None}
+        if "eval" in rigging:
+            run["eval"] = rigging["eval"]
+        runs.append(run)
+        langfuse = extra.get("langfuse") or {}
+        traces.append({key: langfuse[key]
+                       for key in ("trace_id", "trace_name", "tags")
+                       if langfuse.get(key) is not None})
+        if system_prompt is None and rigging.get("system_prompt"):
+            system_prompt = str(rigging["system_prompt"])
+        model = str((doc.get("agent") or {}).get("model_name") or "")
+        if model and model not in models:
+            models.append(model)
+        for key in ("total_prompt_tokens", "total_completion_tokens", "total_cost_usd"):
+            value = (doc.get("final_metrics") or {}).get(key)
+            if value is not None:
+                totals[key] = totals.get(key, 0.0) + float(value)
+
+    first_agent = (ordered[0].get("agent") if ordered else {}) or {}
+    return {
+        "schema_version": ATIF_SCHEMA,
+        "session_id": session_id,
+        "trajectory_id": session_id,
+        "agent": {
+            "name": first_agent.get("name") or "rigging",
+            "version": first_agent.get("version") or _package_version(),
+            "model_name": models[0] if models else first_agent.get("model_name"),
+        },
+        "steps": steps,
+        "notes": (
+            f"One conversation: {len(ordered)} runs/traces from Langfuse session "
+            f"{session_id}, concatenated in start order. Each step's extra.trace_id "
+            "names the run it came from; extra.rigging.runs lists the runs."),
+        "final_metrics": {"total_steps": len(steps), **totals},
+        "extra": {
+            "langfuse": {"session_id": session_id, "traces": traces},
+            "rigging": {
+                "runs": runs,
+                "system_prompt": system_prompt,
+                "models": models,
+            },
+        },
+    }
+
+
 def _safe(name: str) -> str:
     return re.sub(r"[^\w.\-]", "_", name)
 
@@ -458,6 +561,8 @@ def main() -> int:
     ap.add_argument("--stdout", action="store_true", help="print the trajectory instead of writing")
     ap.add_argument("--harbor", metavar="DIR",
                     help="also write a Harbor job layout under DIR, for `harbor view DIR`")
+    ap.add_argument("--combine", action="store_true",
+                    help="one trajectory for the whole session instead of one file per trace")
     ap.add_argument("--db", default="runs/eval.db",
                     help="eval event log to read verdicts from (default: runs/eval.db)")
     a = ap.parse_args()
@@ -469,29 +574,42 @@ def main() -> int:
     verdicts = load_verdicts(Path(a.db))
 
     with httpx.Client(base_url=host, headers=headers, timeout=60) as client:
-        traces = session_traces(client, ident) if kind == "session" else [{"id": ident}]
-
-        written: list[Path] = []
-        trials: list[tuple[str, dict[str, Any]]] = []
-        for trace in traces:
+        trace_refs = session_traces(client, ident) if kind == "session" else [{"id": ident}]
+        docs: list[dict[str, Any]] = []
+        for trace in trace_refs:
             trace_id = trace["id"]
             observations = trace_observations(client, trace_id)
             run_id = next((_attr(o, "rigging.run_id") for o in observations
                            if not o.get("parentObservationId")), None)
             verdict = verdicts.get(str(run_id)) if run_id else None
-            doc = build_trajectory(ident if kind == "session" else _session_of(observations, ident),
-                                   trace, observations, verdict=verdict)
-            if a.stdout:
-                print(json.dumps(doc, indent=2, default=str))
-                continue
-            suffix = "" if len(traces) == 1 else f"-{trace_id[:8]}"
-            name = f"atif-{_safe(doc['session_id'])}{suffix}"
-            path = out / f"{name}.json"
-            path.write_text(json.dumps(doc, indent=2, default=str) + "\n")
-            written.append(path)
-            trials.append((name.removeprefix("atif-"), doc))
-            print(f"{path}  {len(doc['steps'])} steps  "
-                  f"{doc['agent']['name']} / {doc['agent']['model_name']}", file=sys.stderr)
+            docs.append(build_trajectory(
+                ident if kind == "session" else _session_of(observations, ident),
+                trace, observations, verdict=verdict))
+
+    if a.combine and len(docs) > 1:
+        docs = [combine_trajectories(docs, docs[0]["session_id"])]
+
+    if a.stdout:
+        for doc in docs:
+            print(json.dumps(doc, indent=2, default=str))
+        return 0
+
+    written: list[Path] = []
+    trials: list[tuple[str, dict[str, Any]]] = []
+    for doc in docs:
+        suffix = "" if len(docs) == 1 else f"-{doc['trajectory_id'][:8]}"
+        name = f"atif-{_safe(doc['session_id'])}{suffix}"
+        path = out / f"{name}.json"
+        path.write_text(json.dumps(doc, indent=2, default=str) + "\n")
+        written.append(path)
+        trials.append((name.removeprefix("atif-"), doc))
+        print(f"{path}  {len(doc['steps'])} steps  "
+              f"{doc['agent']['name']} / {doc['agent']['model_name']}", file=sys.stderr)
+
+    if len(docs) > 1 and not a.combine:
+        print(f"note: {len(docs)} traces -> {len(docs)} files for this session; "
+              "add --combine (or make atif COMBINE=1) for one conversation trajectory",
+              file=sys.stderr)
 
     if written:
         print("upload: open http://localhost:12000 and drop the file in, "

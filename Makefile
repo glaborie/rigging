@@ -108,10 +108,10 @@ trace: ## run an agent with Langfuse spans, then read them back: make trace [MAN
 	   $(if $(MODEL),--model $(MODEL),) --export langfuse || exit $$?; \
 	 uv run python scripts/langfuse_tail.py --since-file "$$marker" --wait 90
 
-atif: ## export a Langfuse session as an ATIF trajectory: make atif SESSION=s_abc123 [HARBOR=runs/harbor]
-	@test -n "$(SESSION)" || { printf 'usage: make atif SESSION=s_abc123 [OUT=runs/atif] [HARBOR=runs/harbor]\n'; exit 2; }
+atif: ## export a Langfuse session as ATIF: make atif SESSION=s_abc123 [COMBINE=1] [HARBOR=runs/harbor]
+	@test -n "$(SESSION)" || { printf 'usage: make atif SESSION=s_abc123 [COMBINE=1] [OUT=runs/atif] [HARBOR=runs/harbor]\n'; exit 2; }
 	uv run python scripts/langfuse_to_atif.py "$(SESSION)" --out $(if $(OUT),$(OUT),runs/atif) \
-	  $(if $(HARBOR),--harbor $(HARBOR),)
+	  $(if $(filter 1,$(COMBINE)),--combine,) $(if $(HARBOR),--harbor $(HARBOR),)
 
 hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples/hello/)
 	RIGGING_BASE_URL=$${RIGGING_BASE_URL:-http://localhost:20128/v1} \
