@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import enum
 import inspect
+import types
 import typing
 from collections.abc import Callable, Sequence
 from typing import Any
@@ -30,7 +31,7 @@ def _json_type(annotation: Any) -> dict[str, Any]:
         return {"type": "object"}
     if inspect.isclass(annotation) and issubclass(annotation, enum.Enum):
         return {"type": "string", "enum": [m.value for m in annotation]}
-    if origin is typing.Union:
+    if origin in (typing.Union, types.UnionType):
         union_args = [a for a in typing.get_args(annotation) if a is not type(None)]
         if len(union_args) == 1:
             return _json_type(union_args[0])

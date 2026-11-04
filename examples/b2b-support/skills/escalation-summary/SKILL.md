@@ -15,14 +15,11 @@ conversation. It answers four questions, in this order, in at most four sentence
    threshold, ambiguous request, or explicit ask for a human.
 4. **What the human should do** — one concrete next step.
 
-Then append the structured facts block:
+Pass the confirmed facts as the `facts` argument (a JSON object), not in the
+summary prose:
 
-```
-facts:
-  order_id: ...
-  sku: ...
-  amount: ...
-  policy_ids: [p1, p3]
+```json
+{"order_id": "...", "sku": "...", "amount": 0, "policy_ids": ["p1", "p3"]}
 ```
 
 Do not apologise, do not restate the whole conversation, do not promise anything

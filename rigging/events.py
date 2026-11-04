@@ -202,6 +202,33 @@ class EventLog:
             total = total + Usage(**u)
         return total
 
+    def escalations(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Projection: structured handoffs, newest first — the human's queue.
+
+        The event log is the queue of record (ADR-0007). `rowid` breaks a `ts`
+        tie so two escalations written in the same second keep their order.
+        """
+        rows = self._db.execute(
+            "SELECT e.run_id, e.ts, e.payload, r.session_id, r.model, s.title"
+            " FROM run_events e JOIN runs r ON r.run_id = e.run_id"
+            " LEFT JOIN sessions s ON s.session_id = r.session_id"
+            " WHERE e.type = 'escalation'"
+            " ORDER BY e.ts DESC, e.rowid DESC LIMIT ?",
+            (limit,),
+        )
+        out: list[dict[str, Any]] = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            out.append({
+                **payload,
+                "run_id": row["run_id"],
+                "session_id": row["session_id"],
+                "session_title": row["title"],
+                "model": row["model"],
+                "ts": row["ts"],
+            })
+        return out
+
     def export_jsonl(self, run_id: str, path: str | Path | None = None) -> Path:
         """The replayable transcript. `--replay` consumes exactly this file."""
         path = Path(path or f"runs/{run_id}.jsonl")

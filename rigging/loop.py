@@ -732,6 +732,7 @@ def _capture_handoff(agent: Assembled, content: str, log: EventLog, run_id: str)
         return
     log.append(run_id, "escalation", {"reason": agent.handoff.reason,
                                       "summary": agent.handoff.summary,
+                                      "facts": agent.handoff.facts,
                                       "transcript_run_id": agent.handoff.transcript_run_id})
 
 

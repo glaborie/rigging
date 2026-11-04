@@ -81,10 +81,13 @@ uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --mode
 # Interactive chat: one session, many runs, continuous memory
 uv run harness chat examples/hello/agent.yaml
 
+# Handoffs waiting for a human (escalation events, newest first)
+uv run harness escalations
+
 # Offline: replay a recorded transcript instead of calling the API
 uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
 
-# The canonical demo: 5 tools, 2 skills, FTS5 retrieval, 3 guardrails, approval
+# The canonical demo: 11 tools, 2 skills, FTS5 retrieval, 5 guardrail hooks, approval
 make seed                                        # deterministic demo.db (seed=7)
 make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b                          # event-log predicates, per-case table

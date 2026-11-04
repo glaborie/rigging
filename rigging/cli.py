@@ -58,6 +58,12 @@ def _parser() -> argparse.ArgumentParser:
     runs.add_argument("--run", default=None, help="show this run's full event trail")
     runs.add_argument("--limit", type=int, default=10)
 
+    escalations = sub.add_parser("escalations", help="list handoffs waiting for a human")
+    escalations.add_argument("--db", default=None,
+                             help="SQLite path (default: $RIGGING_DB_PATH)")
+    escalations.add_argument("--limit", type=int, default=20)
+    escalations.add_argument("--json", action="store_true")
+
     ev = sub.add_parser("eval", help="run an eval suite over event-log predicates")
     ev.add_argument("suite", help="path to suite.yaml")
     ev.add_argument("--db", default=None)
@@ -243,6 +249,27 @@ def cmd_runs(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_escalations(args: argparse.Namespace) -> int:
+    with EventLog(args.db or settings.db_path) as log:
+        rows = log.escalations(limit=max(1, min(args.limit, 200)))
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no escalations", file=sys.stderr)
+        return 0
+    print(f"{'when':<16} {'reason':<18} {'run':<16} {'session':<18} what")
+    for row in rows:
+        when = time.strftime("%Y-%m-%d %H:%M", time.localtime(row["ts"]))
+        title = str(row.get("session_title") or "-")
+        reason = str(row.get("reason") or "-")
+        summary = (row.get("summary") or "").splitlines()[0]
+        print(f"{when:<16} {reason:<18} {row['run_id']:<16} "
+              f"{title[:18]:<18} {summary[:70]}")
+    print("\ndrill in with: harness runs --run <run_id>")
+    return 0
+
+
 def cmd_schema(_args: argparse.Namespace) -> int:
     from rigging.manifest import SCHEMA_PATH
 
@@ -379,6 +406,7 @@ HANDLERS = {
     "schema": cmd_schema,
     "tools": cmd_tools,
     "runs": cmd_runs,
+    "escalations": cmd_escalations,
     "chat": cmd_chat,
     "index": cmd_index,
     "eval": cmd_eval,

@@ -31,13 +31,16 @@ def make_escalate_tool() -> Tool:
     does not need to know the run it belongs to.
     """
 
-    def escalate_to_human(reason: str, summary: str) -> str:
+    def escalate_to_human(reason: str, summary: str,
+                          facts: dict[str, Any] | None = None) -> str:
         """Hand the conversation to a human. Use when the request is out of policy,
-        too vague to act on, or the customer asks for a person."""
-        handoff = Handoff(reason=reason, summary=summary)
+        too vague to act on, or the customer asks for a person. Pass confirmed
+        facts (order ids, SKUs, amounts) in `facts`, not in the summary prose."""
+        handoff = Handoff(reason=reason, summary=summary, facts=facts or {})
         return f"HANDOFF {handoff.model_dump_json()}"
 
-    _tag(escalate_to_human, "escalate_to_human", "Escalate to a human with a structured handoff.")
+    _tag(escalate_to_human, "escalate_to_human",
+         "Escalate to a human with a summary and structured facts.")
     return FunctionTool(escalate_to_human)
 
 

@@ -72,7 +72,7 @@ rigging/
                     adds the opt-in write path and WebApproval (ADR-0023)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   init_agent.py     `harness init`: the manifest interview, validated before writing
-  cli.py            harness run|init|schema|tools|chat|index|eval|calibrate|serve
+  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered

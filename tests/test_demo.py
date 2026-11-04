@@ -166,6 +166,9 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
     assert {"search_policies", "lookup_order", "search_catalogue", "check_pricing",
             "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
             "refund_order", "escalate_to_human"} <= names
+    escalate = next(t for t in agent.tools if t.name == "escalate_to_human")
+    facts = escalate.json_schema["function"]["parameters"]["properties"]["facts"]
+    assert facts["type"] == "object"  # `dict | None` keeps its type in the schema
 
 
 def test_search_policies_finds_refund_window(demo_db):
@@ -191,16 +194,19 @@ def test_escalation_yields_structured_handoff(tmp_path, demo_db):
     client = FakeClient([
         {"role": "assistant", "content": "",
          "tool_calls": [{"id": "1", "name": "escalate_to_human",
-                          "arguments": {"reason": "out of policy", "summary": "needs a human"}}]},
+                          "arguments": {"reason": "out of policy", "summary": "needs a human",
+                                        "facts": {"order_id": "ORD-1002", "amount": 112.5}}}]},
         {"role": "assistant", "content": "I have escalated this to a human colleague."},
     ])
     log = EventLog(tmp_path / "e.db")
     result = run_agent(spec, "this is out of policy", client=client, log=log)
     assert result.handoff is not None
     assert result.handoff.reason == "out of policy"
+    assert result.handoff.facts == {"order_id": "ORD-1002", "amount": 112.5}
     assert result.handoff.transcript_run_id == result.run_id
-    events = [e["type"] for e in log.events(result.run_id)]
-    assert "escalation" in events
+    events = list(log.events(result.run_id))
+    event = next(e for e in events if e["type"] == "escalation")
+    assert event["payload"]["facts"] == {"order_id": "ORD-1002", "amount": 112.5}
 
 
 def test_replay_and_live_have_same_handoff_contract():  # documents the contract

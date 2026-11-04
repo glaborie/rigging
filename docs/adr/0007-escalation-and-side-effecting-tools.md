@@ -13,7 +13,10 @@ enforces.
 
 `escalate_to_human(reason, summary, facts)` is an ordinary tool whose result is a
 `Handoff` object ending the turn with a structured payload (transcript ids, reason,
-summary) that a real deployment would POST to a ticketing system. Separately, `Tool`
+summary, facts) that a real deployment would POST to a ticketing system.
+`harness escalations` is the read side: the `escalation` events joined to their
+run and session, newest first, with the same `facts` object in `--json`.
+Separately, `Tool`
 carries `side_effecting: bool`; the loop routes any call to a side-effecting tool
 through `ApprovalPolicy` (`CLIApproval` prompts y/N, `ScriptedApproval` answers
 deterministically in tests and replay, `AutoDeny` is the default when unattended).
