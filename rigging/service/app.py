@@ -515,8 +515,14 @@ INDEX_HTML = r"""<!doctype html>
   .card { max-width: 88ch; margin: 0 0 10px; border: 1px solid var(--line);
           border-radius: 8px; background: var(--call); overflow: hidden; }
   .card > .head { display: flex; gap: 8px; align-items: baseline; padding: 7px 11px;
-                  border-bottom: 1px solid var(--line); font: 12px ui-monospace, monospace; }
+                  border-bottom: 1px solid var(--line); font: 12px ui-monospace, monospace;
+                  cursor: pointer; }
   .card > .head .name { color: #8ab4f8; }
+  .card > .head .fold { margin-left: auto; padding: 0 4px; border: 0; background: transparent;
+                        color: var(--dim); font: inherit; cursor: pointer; }
+  .card > .head .fold:hover { color: var(--ink); }
+  .card.folded > .head { border-bottom: 0; }
+  .card.folded > .body { display: none; }
   .card > .body { padding: 8px 11px; font: 12px/1.55 ui-monospace, monospace;
                   white-space: pre-wrap; word-break: break-word; color: var(--dim); }
   .card > .body.out { color: var(--ink); border-top: 1px dashed var(--line); }
@@ -583,6 +589,8 @@ let streamController = null;
 let config = { chat: false, manifest: null, model: null };
 let currentRun = null, currentSession = null, currentStatus = null;
 let events = [], showRaw = false, busy = false;
+// Folded cards survive a re-render, which happens on every streamed event.
+const folded = new Set();
 let panel = 'runs';
 
 const authHeaders = () => (token ? { Authorization: `Bearer ${token}` } : {});
@@ -908,14 +916,39 @@ function agentBubble(text) {
   return node;
 }
 
+function wireFold(card, key) {
+  const button = card.querySelector('.fold');
+  button.type = 'button';
+  const paint = () => {
+    const isFolded = folded.has(key);
+    card.classList.toggle('folded', isFolded);
+    button.textContent = isFolded ? '▸' : '▾';
+    button.title = isFolded ? 'unfold the JSON payload' : 'fold the JSON payload';
+    button.setAttribute('aria-label', button.title);
+    button.setAttribute('aria-expanded', String(!isFolded));
+  };
+  const toggle = () => {
+    if (folded.has(key)) folded.delete(key); else folded.add(key);
+    paint();
+  };
+  button.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
+  card.querySelector('.head').addEventListener('click', (ev) => {
+    if (ev.target.closest('.fold')) return;
+    toggle();
+  });
+  paint();
+}
+
 function callCard(call) {
   const card = el('div', 'card');
   const head = el('div', 'head');
   head.innerHTML = `<span class="name">${esc(call.name)}</span><span>${esc(call.id || '')}</span>`;
+  head.appendChild(el('button', 'fold', '▾'));
   card.appendChild(head);
   const args = JSON.stringify(call.arguments || {}, null, 2);
   card.appendChild(el('div', 'body', args));
   card.dataset.call = call.id || call.name;
+  wireFold(card, `call:${call.id || call.name}`);
   return card;
 }
 
@@ -944,8 +977,10 @@ function approvalCard(ev, index, answeredAt) {
   const head = el('div', 'head');
   head.innerHTML = `<span class="name">${esc(ev.payload.tool)}</span>
     <span>side-effecting · needs approval</span>`;
+  head.appendChild(el('button', 'fold', '▾'));
   card.appendChild(head);
   card.appendChild(el('div', 'body', JSON.stringify(ev.payload.arguments || {}, null, 2)));
+  wireFold(card, `approval:${ev.payload.tool}:${ev.ts}`);
   const row = el('div', 'approve');
   const yes = el('button', 'yes', 'approve');
   const no = el('button', 'no', 'deny');

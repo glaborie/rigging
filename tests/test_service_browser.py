@@ -144,6 +144,55 @@ def test_the_page_renders_markdown_tables_and_escapes_html(tmp_path):
             browser.close()
 
 
+def test_tool_cards_fold_and_unfold(tmp_path):
+    """The JSON payload folds, and the choice survives a re-render of the log."""
+    log = EventLog(tmp_path / "runs.db")
+    session_id = log.start_session(title="browser smoke")
+    run_id = log.start_run(session_id=session_id, model="fake", spec_hash="abc")
+    log.append(run_id, "input_received", {"content": "look up ORD-1002"})
+    log.append(run_id, "tool_call", {"id": "c1", "name": "lookup_order",
+                                     "arguments": {"order_id": "ORD-1002"}})
+    log.append(run_id, "tool_result", {"call_id": "c1", "name": "lookup_order",
+                                       "content": '{"status": "delivered"}', "is_error": False})
+    log.append(run_id, "model_response", {"content": "delivered", "usage": {"input_tokens": 3}})
+    log.append(run_id, "run_finished", {"status": "ok"})
+    log.finish_run(run_id, "ok")
+
+    with _Server(str(log.path), _free_port()) as base_url, sync_playwright() as play:
+        try:
+            browser = play.chromium.launch()
+        except PlaywrightError as exc:  # no Chromium downloaded
+            pytest.skip(f"chromium is not installed: {exc}")
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        try:
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.click(f".run[data-run='{run_id}']")
+            card = page.locator(".card").first
+            card.locator(".fold").wait_for(timeout=10_000)
+            assert "ORD-1002" in card.inner_text()
+            assert card.locator(".body").first.is_visible()
+
+            card.locator(".fold").click()
+            assert "folded" in (card.get_attribute("class") or "")
+            assert not card.locator(".body").first.is_visible()
+            assert card.locator(".fold").get_attribute("aria-expanded") == "false"
+
+            # A re-render (raw toggle and back) must not resurrect the payload.
+            page.check("#meta input[type=checkbox]")
+            page.uncheck("#meta input[type=checkbox]")
+            card = page.locator(".card").first
+            assert "folded" in (card.get_attribute("class") or "")
+
+            card.locator(".fold").click()
+            assert card.locator(".body").first.is_visible()
+            assert card.locator(".fold").get_attribute("aria-expanded") == "true"
+            assert errors == [], f"the page raised: {errors}"
+        finally:
+            browser.close()
+
+
 def test_the_page_lists_escalations_and_opens_them(tmp_path):
     """The web queue: the tab lists the handoff, clicking it opens the run."""
     log, run_id = _finished_run(tmp_path)
