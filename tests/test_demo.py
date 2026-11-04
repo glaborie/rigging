@@ -41,6 +41,8 @@ def test_seed_is_deterministic_and_chunked(tmp_path):
     assert a == b and a["chunks"] >= 8
     db = sqlite3.connect(tmp_path / "a.db")
     assert db.execute("SELECT count(*) FROM orders WHERE status='delivered'").fetchone()[0] >= 3
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"baskets", "basket_items"} <= tables
 
 
 def test_lookup_and_pricing(demo_db):
@@ -70,6 +72,70 @@ def test_search_catalogue_by_name_and_sku(demo_db):
     assert literal["returned"] == 0  # LIKE wildcards are escaped, not expanded
 
 
+def test_basket_lifecycle(demo_db):
+    first = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 4}))
+    basket = first["basket_id"]
+    assert basket.startswith("b_")
+    assert first["count"] == 1
+    assert first["added"]["unit_price"] == 129.0
+    assert first["subtotal"] == 516.0
+
+    second = json.loads(_call("add_to_basket",
+                              {"sku": "SW-24P-GBE", "qty": 2, "basket_id": basket}))
+    assert second["count"] == 2
+
+    # Adding again increments, and the tier is priced at the new line quantity.
+    again = json.loads(_call("add_to_basket",
+                             {"sku": "SFP-10G-LR", "qty": 6, "basket_id": basket}))
+    line = next(i for i in again["items"] if i["sku"] == "SFP-10G-LR")
+    assert line["qty"] == 10 and line["unit_price"] == 122.55
+
+    updated = json.loads(_call("update_basket_item",
+                               {"basket_id": basket, "sku": "SFP-10G-LR", "qty": 4}))
+    line = next(i for i in updated["items"] if i["sku"] == "SFP-10G-LR")
+    assert line["qty"] == 4 and line["unit_price"] == 129.0
+
+    removed = json.loads(_call("update_basket_item",
+                               {"basket_id": basket, "sku": "SW-24P-GBE", "qty": 0}))
+    assert removed["count"] == 1
+    assert [i["sku"] for i in removed["items"]] == ["SFP-10G-LR"]
+
+    view = json.loads(_call("view_basket", {"basket_id": basket}))
+    assert view["subtotal"] == 516.0
+
+    cleared = json.loads(_call("clear_basket", {"basket_id": basket}))
+    assert cleared["count"] == 0 and cleared["subtotal"] == 0
+
+
+def test_basket_flags_policy_and_validates(demo_db):
+    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 2}))
+    assert below["added"]["below_moq"] is True
+
+    over = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 100}))
+    assert over["added"]["exceeds_stock"] is True
+    assert below["basket_id"] != over["basket_id"]  # empty basket_id starts a new basket
+
+    assert _call("add_to_basket", {"sku": "NOPE", "qty": 1}).startswith("error: unknown SKU")
+    assert _call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 0}).startswith("error:")
+    assert _call("update_basket_item",
+                 {"basket_id": below["basket_id"], "sku": "SW-24P-GBE",
+                  "qty": 1}).startswith("error:")
+    assert _call("update_basket_item",
+                 {"basket_id": below["basket_id"], "sku": "SFP-10G-LR",
+                  "qty": -1}).startswith("error:")
+
+
+def test_basket_tables_are_created_on_an_old_seed(demo_db):
+    """Existing demo.db files predate the basket tables; the tool creates them."""
+    db = sqlite3.connect(demo_db)
+    db.execute("DROP TABLE basket_items")
+    db.execute("DROP TABLE baskets")
+    db.commit()
+    db.close()
+    out = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2}))
+    assert out["count"] == 1
+
+
 def test_refund_is_marked_side_effecting(demo_db):
     ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "refund_order"))
     assert getattr(ft, "side_effecting", False) is True
@@ -89,6 +155,7 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
     d.write_text(yaml.safe_dump({
         "name": "b2b", "model": "test", "system_prompt": "be terse",
         "tools": ["search_policies", "lookup_order", "search_catalogue", "check_pricing",
+                  "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
                   "refund_order", "escalate_to_human"],
         "retriever": {"name": "fts5", "options": {}},
         "limits": {"max_steps": 3},
@@ -97,6 +164,7 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
     agent = assemble(spec, client=FakeClient([]))
     names = {t.name for t in agent.tools}
     assert {"search_policies", "lookup_order", "search_catalogue", "check_pricing",
+            "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
             "refund_order", "escalate_to_human"} <= names
 
 

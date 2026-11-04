@@ -17,6 +17,10 @@ tools:
   - lookup_order
   - search_catalogue
   - check_pricing
+  - add_to_basket
+  - view_basket
+  - update_basket_item
+  - clear_basket
   - refund_order
   - load_skill
   - escalate_to_human

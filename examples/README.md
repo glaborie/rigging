@@ -9,7 +9,7 @@ It exercises every layer of the harness at once:
 
 | Layer | How this example exercises it |
 |---|---|
-| tools | 7 tools, one of them `side_effecting` (`refund_order`) |
+| tools | 11 tools, one of them `side_effecting` (`refund_order`) |
 | registry | all capabilities resolved by name from the manifest |
 | skills | two skills, index-only in the prompt, body fetched by `load_skill` |
 | retrieval | policies via FTS5 (`search_policies`; Qdrant is the upgrade path) |

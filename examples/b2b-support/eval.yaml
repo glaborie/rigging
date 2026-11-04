@@ -106,6 +106,16 @@ cases:
       must_include: ["SW-24P-GBE"]
       max_steps: 6
 
+  - id: basket-build-and-view
+    prompt: >
+      I want 10 SFP-10G-LR and 2 SW-24P-GBE. Put them in a basket and show me the
+      subtotal.
+    expect:
+      status: ok
+      tools_called: [add_to_basket, view_basket]
+      must_include: ["SFP-10G-LR"]
+      max_steps: 8
+
   - id: moq-below-minimum
     prompt: "Quote me 2 units of SFP-10G-LR. Just the two."
     expect:

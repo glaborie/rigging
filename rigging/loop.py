@@ -165,6 +165,13 @@ def _instantiate_guardrail(obj: Any, config: dict[str, Any]) -> Any:
     return obj(**config) if isinstance(obj, type) else obj
 
 
+#: The demo capability pack is imported only when a manifest names one of these.
+_DEMO_TOOL_NAMES = frozenset({
+    "lookup_order", "search_catalogue", "check_pricing", "refund_order",
+    "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
+})
+
+
 def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any = None,
              prices: PriceTable | None = None) -> Assembled:
     if registry is None:
@@ -173,8 +180,7 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         import rigging.guardrails
         import rigging.retriever
         import rigging.tools.core
-        if any(n in ("lookup_order", "search_catalogue", "check_pricing", "refund_order")
-               for n in spec.tools):
+        if _DEMO_TOOL_NAMES.intersection(spec.tools):
             import rigging.tools.demo  # noqa: F401  (demo pack, registered on demand)
         registry = DEFAULT_REGISTRY
         # Entry-points are discovered on by default; this is logged by the runner

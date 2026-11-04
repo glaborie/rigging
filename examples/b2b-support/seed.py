@@ -64,6 +64,10 @@ def build_db(out: Path, seed: int = 7) -> dict[str, int]:
                           moq INTEGER, lead_days INTEGER, stock INTEGER);
     CREATE TABLE orders(order_id TEXT PRIMARY KEY, sku TEXT, qty INTEGER,
                         unit_price REAL, status TEXT, delivered_at TEXT, note TEXT);
+    CREATE TABLE baskets(basket_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+    CREATE TABLE basket_items(basket_id TEXT NOT NULL, sku TEXT NOT NULL,
+                              qty INTEGER NOT NULL, added_at TEXT NOT NULL,
+                              PRIMARY KEY (basket_id, sku));
     """)
     db.executemany("INSERT INTO products VALUES (?,?,?,?,?,?)", PRODUCTS)
 

@@ -8,11 +8,14 @@ approval policy gate it before this function ever runs (ADR-0004, ADR-0007).
 
 from __future__ import annotations
 
+import datetime as _dt
 import json
 import os
 import sqlite3
+import uuid
 from contextlib import closing
 from pathlib import Path
+from typing import Any
 
 from rigging.registry import DEFAULT_REGISTRY, tool
 
@@ -41,6 +44,121 @@ def _tier(list_price: float, qty: int) -> float:
     if qty >= 10:
         return 0.95
     return 1.0
+
+
+BASKET_SCHEMA = """
+CREATE TABLE IF NOT EXISTS baskets (
+  basket_id  TEXT PRIMARY KEY,
+  created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS basket_items (
+  basket_id TEXT NOT NULL,
+  sku       TEXT NOT NULL,
+  qty       INTEGER NOT NULL,
+  added_at  TEXT NOT NULL,
+  PRIMARY KEY (basket_id, sku)
+);
+"""
+
+
+def _basket_db() -> sqlite3.Connection:
+    """The demo DB plus the basket tables. Old seeded databases gain them here."""
+    db = _db()
+    db.executescript(BASKET_SCHEMA)
+    db.commit()
+    return db
+
+
+def _now() -> str:
+    return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+
+
+def _line(db: sqlite3.Connection, sku: str, qty: int) -> dict[str, Any]:
+    product = db.execute("SELECT * FROM products WHERE sku = ?", (sku,)).fetchone()
+    if product is None:  # the catalogue is fixed; a stale basket is a bug, not input
+        return {"sku": sku, "qty": qty, "missing": True}
+    unit = _money(_tier(product["list_price"], qty) * product["list_price"])
+    return {
+        "sku": sku, "name": product["name"], "qty": qty,
+        "unit_price": unit, "line_total": _money(unit * qty),
+        "list_price": product["list_price"], "moq": product["moq"],
+        "below_moq": qty < product["moq"], "stock": product["stock"],
+        "exceeds_stock": qty > product["stock"], "lead_days": product["lead_days"],
+    }
+
+
+def _view(db: sqlite3.Connection, basket_id: str) -> dict[str, Any]:
+    rows = db.execute(
+        "SELECT sku, qty FROM basket_items WHERE basket_id = ? ORDER BY sku", (basket_id,)
+    ).fetchall()
+    items = [_line(db, row["sku"], row["qty"]) for row in rows]
+    return {
+        "basket_id": basket_id, "items": items, "count": len(items),
+        "subtotal": _money(sum(float(item.get("line_total", 0.0)) for item in items)),
+    }
+
+
+@tool()
+def add_to_basket(sku: str, qty: int, basket_id: str = "") -> str:
+    """Add qty of a SKU to a basket. Omit basket_id to start one; reuse the id it returns."""
+    if qty <= 0:
+        return f"error: qty must be positive (got {qty})"
+    with closing(_basket_db()) as db:
+        if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone() is None:
+            return f"error: unknown SKU {sku!r}"
+        basket_id = basket_id.strip() or f"b_{uuid.uuid4().hex[:8]}"
+        db.execute("INSERT OR IGNORE INTO baskets(basket_id, created_at) VALUES (?,?)",
+                   (basket_id, _now()))
+        db.execute(
+            "INSERT INTO basket_items(basket_id, sku, qty, added_at) VALUES (?,?,?,?)"
+            " ON CONFLICT(basket_id, sku) DO UPDATE SET qty = qty + excluded.qty",
+            (basket_id, sku, qty, _now()),
+        )
+        db.commit()
+        total = db.execute("SELECT qty FROM basket_items WHERE basket_id = ? AND sku = ?",
+                           (basket_id, sku)).fetchone()["qty"]
+        return json.dumps({"added": _line(db, sku, total), **_view(db, basket_id)}, indent=1)
+
+
+@tool()
+def view_basket(basket_id: str) -> str:
+    """Show a basket's lines with tier unit prices, MOQ/stock flags and the subtotal."""
+    with closing(_basket_db()) as db:
+        return json.dumps(_view(db, basket_id.strip()), indent=1)
+
+
+@tool()
+def update_basket_item(basket_id: str, sku: str, qty: int) -> str:
+    """Set a basket line to qty; qty=0 removes the line. Use add_to_basket for new lines."""
+    if qty < 0:
+        return f"error: qty must be zero or positive (got {qty})"
+    with closing(_basket_db()) as db:
+        if qty == 0:
+            removed = db.execute("DELETE FROM basket_items WHERE basket_id = ? AND sku = ?",
+                                 (basket_id, sku)).rowcount
+            db.commit()
+            if not removed:
+                return f"error: {sku!r} is not in basket {basket_id!r}"
+            return json.dumps({"removed": sku, **_view(db, basket_id)}, indent=1)
+        if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone() is None:
+            return f"error: unknown SKU {sku!r}"
+        updated = db.execute("UPDATE basket_items SET qty = ? WHERE basket_id = ? AND sku = ?",
+                             (qty, basket_id, sku)).rowcount
+        db.commit()
+        if not updated:
+            return (f"error: {sku!r} is not in basket {basket_id!r}; "
+                    "use add_to_basket for a new line")
+        return json.dumps({"updated": _line(db, sku, qty), **_view(db, basket_id)}, indent=1)
+
+
+@tool()
+def clear_basket(basket_id: str) -> str:
+    """Remove every line from a basket. The basket id stays valid for a new build."""
+    with closing(_basket_db()) as db:
+        removed = db.execute("DELETE FROM basket_items WHERE basket_id = ?",
+                             (basket_id.strip(),)).rowcount
+        db.commit()
+        return json.dumps({"removed": removed, **_view(db, basket_id.strip())}, indent=1)
 
 
 @tool()
