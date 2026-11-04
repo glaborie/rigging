@@ -513,10 +513,10 @@ INDEX_HTML = r"""<!doctype html>
   .md .right { text-align: right; }
   .md .center { text-align: center; }
   .card { max-width: 88ch; margin: 0 0 10px; border: 1px solid var(--line);
-          border-radius: 8px; background: var(--call); overflow: hidden; }
+          border-radius: 8px; background: var(--call); overflow: hidden;
+          cursor: pointer; }
   .card > .head { display: flex; gap: 8px; align-items: baseline; padding: 7px 11px;
-                  border-bottom: 1px solid var(--line); font: 12px ui-monospace, monospace;
-                  cursor: pointer; }
+                  border-bottom: 1px solid var(--line); font: 12px ui-monospace, monospace; }
   .card > .head .name { color: #8ab4f8; }
   .card > .head .fold { margin-left: auto; padding: 0 4px; border: 0; background: transparent;
                         color: var(--dim); font: inherit; cursor: pointer; }
@@ -932,8 +932,12 @@ function wireFold(card, key) {
     paint();
   };
   button.addEventListener('click', (ev) => { ev.stopPropagation(); toggle(); });
-  card.querySelector('.head').addEventListener('click', (ev) => {
-    if (ev.target.closest('.fold')) return;
+  // Anywhere else on the card folds too — except a control (approve/deny, a
+  // link) or the tail of a text selection, where the click means "copy".
+  card.addEventListener('click', (ev) => {
+    if (ev.target.closest('button, a, .approve')) return;
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed) return;
     toggle();
   });
   paint();

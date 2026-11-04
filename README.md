@@ -165,10 +165,10 @@ The left column lists runs; picking one shows the session's earlier turns and th
 follows the selected run live over SSE (`/api/runs/{id}/stream`). The transcript
 is built from events — user and agent bubbles, one card per tool call with its
 arguments and result, a guardrail line per hook, and a footer with the model
-turns and token counts. A tool card's JSON folds and unfolds from its header (or
-the `▾` button), and stays folded across the live re-renders. `raw events`
-switches to the unfiltered log. Agent answers render as markdown, including
-tables.
+turns and token counts. Clicking anywhere on a tool card folds or unfolds its
+JSON (except the approve/deny buttons and a text selection you are dragging),
+and the folded state survives the live re-renders. `raw events` switches to the
+unfiltered log. Agent answers render as markdown, including tables.
 
 The **escalations** tab in that column is the human queue: reason, session,
 summary and fact keys for each handoff (`GET /api/escalations`), and clicking a

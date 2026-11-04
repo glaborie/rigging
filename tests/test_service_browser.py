@@ -174,7 +174,8 @@ def test_tool_cards_fold_and_unfold(tmp_path):
             assert "ORD-1002" in card.inner_text()
             assert card.locator(".body").first.is_visible()
 
-            card.locator(".fold").click()
+            # Anywhere on the card folds, not just the header button.
+            card.locator(".body").first.click()
             assert "folded" in (card.get_attribute("class") or "")
             assert not card.locator(".body").first.is_visible()
             assert card.locator(".fold").get_attribute("aria-expanded") == "false"
@@ -185,7 +186,7 @@ def test_tool_cards_fold_and_unfold(tmp_path):
             card = page.locator(".card").first
             assert "folded" in (card.get_attribute("class") or "")
 
-            card.locator(".fold").click()
+            card.locator(".head").click()
             assert card.locator(".body").first.is_visible()
             assert card.locator(".fold").get_attribute("aria-expanded") == "true"
             assert errors == [], f"the page raised: {errors}"
