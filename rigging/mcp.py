@@ -138,7 +138,6 @@ class McpToolSource:
                 ClientSession(read, write) as session,
             ):
                 yield session
-                yield session
 
         return _cm()
 
@@ -199,9 +198,11 @@ def collect(
     bare `server__*` is not magic — explicitness is the point (ADR-0013).
     """
     tools: list[McpTool] = []
+    available: list[str] = []
     for cfg in cfgs:
         source = McpToolSource(cfg, session_factory=session_factory)
         discovered = source.discover()
+        available.extend(f"{cfg.name}__{t['name']}" for t in discovered)
         bare_names = [
             t["name"]
             for t in discovered
@@ -213,6 +214,5 @@ def collect(
     if allow:
         missing = [name for name in allow if name not in {t.name for t in tools}]
         if missing:
-            available = [f"{cfg.name}__{t.name}" for cfg in cfgs for t in tools]
             raise CapabilityNotFound("mcp tool", missing, available)
     return tools

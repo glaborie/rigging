@@ -127,6 +127,83 @@ def test_collect_filters_by_the_manifest_allow_list() -> None:
     assert [t.name for t in tools] == ["demo__search"]
 
 
+def test_http_transport_yields_the_session_once(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regression: the HTTP context manager used to `yield session` twice.
+
+    `@asynccontextmanager` allows exactly one yield; the second raised
+    "generator didn't stop" when the session closed. Fake MCP modules keep this
+    offline and independent of the `[mcp]` extra.
+    """
+    import asyncio
+    import sys
+    import types
+
+    from rigging.mcp import McpToolSource
+
+    steps: list[str] = []
+
+    class _Stream:
+        async def __aenter__(self) -> tuple[str, str]:
+            steps.append("transport-open")
+            return ("read", "write")
+
+        async def __aexit__(self, *exc: object) -> None:
+            steps.append("transport-close")
+
+    class _Session:
+        def __init__(self, read: str, write: str) -> None:
+            self.read, self.write = read, write
+
+        async def __aenter__(self) -> _Session:
+            steps.append("session-open")
+            return self
+
+        async def __aexit__(self, *exc: object) -> None:
+            steps.append("session-close")
+
+    mcp_mod = types.ModuleType("mcp")
+    mcp_mod.ClientSession = _Session
+    client_mod = types.ModuleType("mcp.client")
+    http_mod = types.ModuleType("mcp.client.streamable_http")
+    http_mod.streamable_http_client = lambda url: _Stream()
+    client_mod.streamable_http = http_mod
+    monkeypatch.setitem(sys.modules, "mcp", mcp_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client", client_mod)
+    monkeypatch.setitem(sys.modules, "mcp.client.streamable_http", http_mod)
+
+    source = McpToolSource(
+        McpServerCfg(name="demo", url="http://example.test/mcp", transport="http"),
+        session_factory=lambda: None,
+    )
+
+    async def _go() -> None:
+        async with source._http_cm() as session:
+            assert isinstance(session, _Session)
+
+    asyncio.run(_go())
+    assert steps == ["transport-open", "session-open", "session-close", "transport-close"]
+
+
+def test_collect_names_available_tools_once() -> None:
+    """The not-found diagnostic must not namespace an already-namespaced name."""
+    from contextlib import asynccontextmanager
+
+    from rigging.mcp import collect
+
+    @asynccontextmanager
+    async def _factory():
+        yield FakeSession([{"name": "search", "input_schema": {}}])
+
+    with pytest.raises(RiggingError) as exc:
+        collect(
+            [McpServerCfg(name="demo", transport="stdio", command="unused")],
+            allow=["demo__missing"],
+            session_factory=_factory,
+        )
+    assert "demo__search" in str(exc.value)
+    assert "demo__demo__" not in str(exc.value)
+
+
 def test_stdio_requires_a_command_and_http_requires_a_url() -> None:
     from rigging.mcp import McpToolSource
 
