@@ -12,15 +12,19 @@ from __future__ import annotations
 import datetime as _dt
 import os
 import sqlite3
+from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from rigging.protocols import Allow, Deny, Verdict
+from rigging.registry import guardrail
 from rigging.types import ToolCall
 
 
+@guardrail("refund_window")
 class RefundWindowGuardrail:
     name = "refund_window"
+    hooks = ("on_tool_call",)
 
     def __init__(self, *, tool: str = "refund_order", max_days: int = 30,
                  db_path: str | None = None, order_arg: str = "order_id") -> None:
@@ -32,9 +36,10 @@ class RefundWindowGuardrail:
         path = Path(self.db_path) if self.db_path else self._db_path_default
         if not path.exists():
             return None
-        db = sqlite3.connect(path)
-        row = db.execute("SELECT delivered_at FROM orders WHERE order_id = ?", (order_id,)).fetchone()
-        db.close()
+        with closing(sqlite3.connect(path)) as db:
+            row = db.execute(
+                "SELECT delivered_at FROM orders WHERE order_id = ?", (order_id,)
+            ).fetchone()
         return row[0] if row else None
 
     def on_input(self, messages: Any) -> Verdict:
@@ -63,8 +68,3 @@ class RefundWindowGuardrail:
 
     def on_output(self, text: str, messages: Any) -> Verdict:
         return Allow()
-
-
-from rigging.registry import DEFAULT_REGISTRY  # noqa: E402
-
-DEFAULT_REGISTRY.add("guardrail", RefundWindowGuardrail.name, RefundWindowGuardrail, replace=True)

@@ -15,14 +15,14 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
 from rigging.approvals import AutoDenyApproval, CLIPromptApproval, ScriptedApproval
 from rigging.config import settings
-from rigging.errors import CapabilityNotFound
+from rigging.errors import CapabilityNotFound, ManifestError
 from rigging.events import EventLog
 from rigging.manifest import AgentSpec
 from rigging.pricing import PriceTable
@@ -206,6 +206,12 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
     for hook in guardrails:
         for ref in getattr(spec.guardrails, hook):
             impl = _instantiate_guardrail(registry.get("guardrail", ref.name), ref.config)
+            declared = tuple(getattr(impl, "hooks", ()))
+            if hook not in declared:
+                raise ManifestError(
+                    f"guardrail {ref.name!r} is wired to {hook} but declares "
+                    f"{list(declared) or 'no hooks'}"
+                )
             guardrails[hook].append(impl)
 
     skills = None
@@ -261,7 +267,8 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         exporters.append(factory(**opts))
 
     return Assembled(spec=spec, client=client, tools=tools, guardrails=guardrails,
-                     skills=skills, approval=approval, prices=prices or PriceTable.load(),
+                     skills=skills, approval=approval,
+                     prices=prices or PriceTable.load(settings.prices_file),
                      exporters=exporters)
 
 
@@ -411,7 +418,6 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     log.append(run_id, "input_received", {"content": user_content})
 
     if spec.subagents:
-        from rigging.errors import ManifestError
         from rigging.subagents import make_spawn_tool, resolve_child
 
         declared = {t.name for t in agent.tools}
@@ -449,7 +455,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     exhausted: str | None = None
 
     for step in range(1, spec.limits.max_steps + 1):
-        reason = _check_budget(spec, usage, started, agent.prices, step)
+        reason = _check_budget(spec, usage, started, agent.prices)
         log.append(run_id, "budget_check", {"step": step, "usage": usage.model_dump(), "blocked": reason})
         if reason:
             exhausted = reason
@@ -559,7 +565,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     return _close_and(result)
 
 
-def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTable, step: int) -> str | None:
+def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTable) -> str | None:
     limits = spec.limits
     if usage.input_tokens + usage.output_tokens > (limits.max_tokens or 10**18):
         return "max_tokens"
@@ -574,26 +580,15 @@ def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTa
 
 def _streaming_call(agent: Assembled, request: ModelRequest, log: EventLog, run_id: str,
                     stream: Callable[[ModelDelta], None]) -> ModelResponse:
-    text: list[str] = []
-    reasoning: list[str] = []
-    from rigging.client.openai_compat import OpenAICompatClient
+    """Stream to the caller and accumulate the same way `complete()` does."""
+    from rigging.client.openai_compat import accumulate
 
-    calls: dict[int, dict[str, Any]] = {}
-    usage = Usage()
-    finish = None
-    for delta in agent.client.stream(request, on_error=lambda t, p: log.append(run_id, t, p)):
-        stream(delta)
-        text.append(delta.text)
-        reasoning.append(delta.reasoning)
-        if delta.usage:
-            usage = delta.usage
-        if delta.tool_call_delta:
-            OpenAICompatClient._merge_tool_delta(None, calls, delta.tool_call_delta)  # type: ignore[arg-type]
-        finish = delta.finish_reason or finish
-    return ModelResponse(
-        message=OpenAICompatClient._assemble_message(None, "".join(text), "".join(reasoning), calls),  # type: ignore[arg-type]
-        usage=usage, finish_reason=finish, model=request.model,
-    )
+    def deltas() -> Iterator[ModelDelta]:
+        for delta in agent.client.stream(request, on_error=lambda t, p: log.append(run_id, t, p)):
+            stream(delta)
+            yield delta
+
+    return accumulate(deltas(), model=request.model)
 
 
 @dataclass

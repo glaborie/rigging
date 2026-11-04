@@ -8,6 +8,7 @@ from rigging.guardrails.commitment import CommitmentGuardrail
 from rigging.guardrails.consequential import ConsequentialActionGuardrail
 from rigging.guardrails.injection import PromptInjectionGuardrail
 from rigging.guardrails.pii import PIIRedactionGuardrail
+from rigging.guardrails.refund_window import RefundWindowGuardrail
 from rigging.registry import DEFAULT_REGISTRY
 
 BUILTIN_GUARDRAILS = (
@@ -15,6 +16,7 @@ BUILTIN_GUARDRAILS = (
     PromptInjectionGuardrail,
     ConsequentialActionGuardrail,
     CommitmentGuardrail,
+    RefundWindowGuardrail,
 )
 
 for _cls in BUILTIN_GUARDRAILS:
@@ -26,6 +28,5 @@ __all__ = [
     "ConsequentialActionGuardrail",
     "PIIRedactionGuardrail",
     "PromptInjectionGuardrail",
+    "RefundWindowGuardrail",
 ]
-
-from rigging.guardrails.refund_window import RefundWindowGuardrail  # noqa: E402,F401

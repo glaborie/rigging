@@ -23,7 +23,7 @@ from typing import Any
 import httpx
 
 from rigging.errors import TransportError
-from rigging.types import Message, ModelDelta, ModelRequest, ModelResponse, Usage
+from rigging.types import Message, ModelDelta, ModelRequest, ModelResponse, ToolCall, Usage
 
 _RETRY_STATUS = {408, 409, 425, 429, 500, 502, 503, 504}
 _DATA_PREFIX = re.compile(r"^data:\s?")
@@ -69,23 +69,8 @@ class OpenAICompatClient:
 
     def complete(self, request: ModelRequest) -> ModelResponse:
         started = time.perf_counter()
-        text: list[str] = []
-        reasoning: list[str] = []
-        calls: dict[int, dict[str, Any]] = {}
-        usage = Usage()
-        finish: str | None = None
-        for delta in self.stream(request):
-            text.append(delta.text)
-            reasoning.append(delta.reasoning)
-            if delta.tool_call_delta:
-                self._merge_tool_delta(calls, delta.tool_call_delta)
-            if delta.usage:
-                usage = delta.usage
-            finish = delta.finish_reason or finish
-        return ModelResponse(
-            message=self._assemble_message("".join(text), "".join(reasoning), calls),
-            usage=usage,
-            finish_reason=finish,
+        return accumulate(
+            self.stream(request),
             model=request.model,
             latency_ms=int((time.perf_counter() - started) * 1000),
         )
@@ -172,29 +157,57 @@ class OpenAICompatClient:
         if text or reasoning or finish or usage:
             yield ModelDelta(text=text, reasoning=reasoning, finish_reason=finish, usage=usage)
 
-    def _merge_tool_delta(self, calls: dict[int, dict[str, Any]], delta: dict[str, Any]) -> None:
-        index = delta.get("index", 0)
-        entry = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
-        if delta.get("id"):
-            entry["id"] = delta["id"]
-        fn = delta.get("function") or {}
-        if fn.get("name"):
-            entry["name"] = fn["name"]
-        if fn.get("arguments"):
-            entry["arguments"] += fn["arguments"]
+def accumulate(deltas: Iterator[ModelDelta], *, model: str = "",
+               latency_ms: int = 0) -> ModelResponse:
+    """Fold a stream of deltas into the one response the loop reasons about.
 
-    def _assemble_message(self, text: str, reasoning: str, calls: dict[int, dict[str, Any]]) -> Message:
-        from rigging.types import ToolCall
+    Shared by `complete()` and by `run_agent(stream=...)`: the loop must not
+    re-implement the client's tool-call reassembly to stream to the terminal.
+    """
+    text: list[str] = []
+    reasoning: list[str] = []
+    calls: dict[int, dict[str, Any]] = {}
+    usage = Usage()
+    finish: str | None = None
+    for delta in deltas:
+        text.append(delta.text)
+        reasoning.append(delta.reasoning)
+        if delta.tool_call_delta:
+            _merge_tool_delta(calls, delta.tool_call_delta)
+        if delta.usage:
+            usage = delta.usage
+        finish = delta.finish_reason or finish
+    return ModelResponse(
+        message=_assemble_message("".join(text), "".join(reasoning), calls),
+        usage=usage,
+        finish_reason=finish,
+        model=model,
+        latency_ms=latency_ms,
+    )
 
-        tool_calls = []
-        for index in sorted(calls):
-            entry = calls[index]
-            raw = entry["arguments"]
-            try:
-                args = json.loads(raw) if raw else {}
-            except json.JSONDecodeError:
-                args = {}
-            tool_calls.append(ToolCall(id=entry["id"] or f"call_{index}", name=entry["name"],
-                                       arguments=args, raw_arguments=raw))
-        return Message(role="assistant", content=text, reasoning=reasoning or None,
-                       tool_calls=tool_calls)
+
+def _merge_tool_delta(calls: dict[int, dict[str, Any]], delta: dict[str, Any]) -> None:
+    index = delta.get("index", 0)
+    entry = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
+    if delta.get("id"):
+        entry["id"] = delta["id"]
+    fn = delta.get("function") or {}
+    if fn.get("name"):
+        entry["name"] = fn["name"]
+    if fn.get("arguments"):
+        entry["arguments"] += fn["arguments"]
+
+
+def _assemble_message(text: str, reasoning: str, calls: dict[int, dict[str, Any]]) -> Message:
+    tool_calls = []
+    for index in sorted(calls):
+        entry = calls[index]
+        raw = entry["arguments"]
+        try:
+            args = json.loads(raw) if raw else {}
+        except json.JSONDecodeError:
+            args = {}
+        tool_calls.append(ToolCall(id=entry["id"] or f"call_{index}", name=entry["name"],
+                                   arguments=args, raw_arguments=raw))
+    return Message(role="assistant", content=text, reasoning=reasoning or None,
+                   tool_calls=tool_calls)

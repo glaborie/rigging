@@ -7,32 +7,18 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from rigging import loop as loop_module
 from rigging.approvals import AutoDenyApproval, ScriptedApproval
-from rigging.errors import TransportError
+from rigging.errors import ManifestError, TransportError
 from rigging.events import EventLog
-from rigging.loop import run_agent
+from rigging.loop import assemble, run_agent
 from rigging.manifest import AgentSpec, GuardrailRef, Guardrails, Limits
 from rigging.protocols import Allow, Deny, Transform
 from rigging.registry import Registry
-from rigging.types import Message, ModelRequest, ModelResponse, ToolCall, Usage
-
-
-class FakeClient:
-    """Replays scripted responses in order."""
-
-    name = "fake"
-
-    def __init__(self, responses: list[ModelResponse]) -> None:
-        self.responses = list(responses)
-        self.requests: list[ModelRequest] = []
-
-    def complete(self, request: ModelRequest) -> ModelResponse:
-        self.requests.append(request)
-        return self.responses.pop(0)
-
-    def stream(self, request: ModelRequest, on_error: Any = None):  # pragma: no cover
-        raise NotImplementedError
+from rigging.testing import FakeClient
+from rigging.types import Message, ModelDelta, ModelRequest, ModelResponse, ToolCall, Usage
 
 
 def _resp(content: str = "", calls: list[ToolCall] | None = None) -> ModelResponse:
@@ -387,3 +373,53 @@ def test_the_loop_closes_a_log_it_created(tmp_path: Path, monkeypatch: Any) -> N
                                    client=FakeClient([_resp("done")]))
     assert result.status == "ok"
     assert Counting.closes == 1
+
+
+def test_streaming_calls_reach_the_callback_and_the_result(tmp_path: Path) -> None:
+    """The loop streams deltas and still folds them into one ModelResponse."""
+
+    class Streaming:
+        name = "streaming"
+
+        def stream(self, request: ModelRequest, on_error: Any = None) -> Any:
+            yield ModelDelta(text="he")
+            yield ModelDelta(text="llo", finish_reason="stop",
+                             usage=Usage(input_tokens=1, output_tokens=2))
+
+        def complete(self, request: ModelRequest) -> ModelResponse:  # pragma: no cover
+            raise AssertionError("stream= should use the stream path")
+
+    seen: list[ModelDelta] = []
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(_spec(), "go", registry=_registry(), client=Streaming(),
+                           log=log, stream=seen.append)
+    assert result.output == "hello"
+    assert [d.text for d in seen] == ["he", "llo"]
+    assert result.usage.input_tokens == 1
+    assert result.usage.output_tokens == 2
+
+
+def test_guardrail_wired_to_an_undeclared_hook_fails_fast() -> None:
+    """`.hooks` is a contract, not decoration: assembly refuses a mismatch."""
+
+    class OutputOnly:
+        name = "output_only"
+        hooks: tuple[str, ...] = ("on_output",)
+
+        def on_input(self, messages: Any) -> Any:
+            return Allow()
+
+        def on_tool_call(self, call: Any, tool: Any) -> Any:
+            return Allow()
+
+        def on_tool_result(self, call: Any, content: str) -> Any:
+            return Allow()
+
+        def on_output(self, text: str, messages: Any) -> Any:
+            return Allow()
+
+    reg = _registry()
+    reg.add("guardrail", "output_only", OutputOnly)
+    spec = _spec(guardrails=Guardrails(on_input=[GuardrailRef(name="output_only")]))
+    with pytest.raises(ManifestError, match="declares"):
+        assemble(spec, registry=reg, client=FakeClient([]))
