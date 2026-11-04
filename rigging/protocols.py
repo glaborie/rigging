@@ -30,7 +30,9 @@ class LLMClient(Protocol):
 
     name: str
 
-    def stream(self, request: ModelRequest) -> Iterator[ModelDelta]: ...
+    def stream(self, request: ModelRequest, *, on_error: Any = None) -> Iterator[ModelDelta]:
+        """Yield normalised deltas; report a bad frame through `on_error(type, payload)`."""
+        ...
 
     def complete(self, request: ModelRequest) -> ModelResponse: ...
 

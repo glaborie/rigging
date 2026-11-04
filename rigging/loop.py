@@ -345,17 +345,34 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         agent.approval = approval
 
     # The root span is created after the input guardrail, so a holder keeps the
-    # helper below usable on the earliest exit path too.
-    root: dict[str, Any] = {"span": None, "ended": False}
+    # helper below usable on the earliest exit path too. `finished` makes
+    # `run_finished` exactly once, whichever path ends the run.
+    root: dict[str, Any] = {"span": None, "ended": False, "finished": False}
     used_tools: set[str] = set()
 
+    owns_log = log is None
+    log = log or EventLog(settings.db_path)
+    session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
+    run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
+                           parent_run_id=parent_run_id, run_id=run_id)
+
+    def _finish(status: str, **extra: Any) -> None:
+        """The `run_finished` event, written once per run (hard rule 2)."""
+        if root["finished"]:
+            return
+        root["finished"] = True
+        log.append(run_id, "run_finished", {"status": status, **extra})
+
     def _close_and(result: RunResult) -> RunResult:
-        """End the root span and flush every exporter on every exit path.
+        """End the run row and root span, and flush every exporter, on every exit.
 
         A batch processor that is never shut down drops its spans when the CLI
         exits, and a run-level backend (MLflow) leaves the run RUNNING forever if
         the root span is never ended. Denied and exhausted runs produced spans too.
+        The log is closed only when this call created it; a caller's log stays open.
         """
+        _finish(result.status, **({"error": result.error} if result.error else {}))
+        log.finish_run(run_id, result.status)
         if root["span"] is not None and not root["ended"]:
             _end_span(agent, root["span"], {
                 "rigging.status": result.status,
@@ -372,13 +389,9 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                 exporter.close()
             except Exception:
                 continue
+        if owns_log:
+            log.close()
         return result
-
-    log = log or EventLog(settings.db_path)
-    owns_log = log is None
-    session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
-    run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
-                           parent_run_id=parent_run_id, run_id=run_id)
 
     system = spec.prompt().strip()
     if agent.skills is not None:
@@ -392,7 +405,6 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     verdict, notes = _apply("on_input", agent.guardrails["on_input"], [Message(role="user", content=prompt)])
     log.append(run_id, "guardrail_verdict", {"hook": "on_input", "checks": notes})
     if isinstance(verdict, Deny):
-        log.finish_run(run_id, "denied")
         return _close_and(RunResult(run_id=run_id, status="denied", error=verdict.reason))
     user_content = verdict.value if isinstance(verdict, Transform) else prompt
     messages.append(Message(role="user", content=user_content))
@@ -454,7 +466,15 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         })
         request = ModelRequest(model=spec.model, messages=messages, tools=wire)
         log.append(run_id, "model_request", {"model": spec.model, "messages": len(messages), "tools": list(tools)})
-        response = agent.client.complete(request) if stream is None else _streaming_call(agent, request, log, run_id, stream)
+        try:
+            response = agent.client.complete(request) if stream is None else _streaming_call(agent, request, log, run_id, stream)
+        except Exception as exc:  # a gateway failure is a run outcome, not a crash
+            error = f"{type(exc).__name__}: {exc}"
+            log.append(run_id, "error", {"stage": "model_request", "step": step, "error": error})
+            _end_span(agent, call_span, {"rigging.status": "error", "rigging.error": error})
+            return _close_and(RunResult(run_id=run_id, status="error", usage=usage,
+                                        steps=step, error=error,
+                                        cost_usd=agent.prices.cost(spec.model, usage)))
 
         usage = usage + response.usage
         last = response
@@ -502,17 +522,19 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         log.append(run_id, "budget_check", {"exhausted": exhausted})
         final = _final_answer(agent, spec, messages, log, run_id, stream)
         if final is None:
-            log.finish_run(run_id, "budget_exhausted")
             return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
                                         steps=spec.limits.max_steps, error=exhausted,
                                         cost_usd=agent.prices.cost(spec.model, usage)))
         last = final
+        # The final answer is a real model call: its tokens are part of the run,
+        # and the event log already has them. Leaving them out made RunResult
+        # disagree with EventLog.usage() and under-report cost.
+        usage = usage + final.usage
 
     output = last.message.content if last else ""
     out_verdict, out_notes = _apply("on_output", agent.guardrails["on_output"], output, messages)
     log.append(run_id, "output_verdict", {"checks": out_notes})
     if isinstance(out_verdict, Deny):
-        log.finish_run(run_id, "denied")
         return _close_and(RunResult(run_id=run_id, status="denied", usage=usage,
                                     error=out_verdict.reason))
     if isinstance(out_verdict, Transform):
@@ -529,10 +551,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         **_content(spec, output_value=output, trace=True),
     })
     root["ended"] = True
-    log.append(run_id, "run_finished", {"status": "ok", "content_chars": len(output)})
-    log.finish_run(run_id, "ok")
-    if owns_log:
-        log.close()
+    _finish("ok", content_chars=len(output))
     result = RunResult(run_id=run_id, status="ok", output=output, usage=usage,
                        steps=step if not exhausted else spec.limits.max_steps,
                        cost_usd=agent.prices.cost(spec.model, usage), handoff=agent.handoff)

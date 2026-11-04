@@ -7,7 +7,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from rigging import loop as loop_module
 from rigging.approvals import AutoDenyApproval, ScriptedApproval
+from rigging.errors import TransportError
 from rigging.events import EventLog
 from rigging.loop import run_agent
 from rigging.manifest import AgentSpec, GuardrailRef, Guardrails, Limits
@@ -143,9 +145,13 @@ def test_budget_exhaustion_asks_for_final_answer(tmp_path: Path) -> None:
     with EventLog(tmp_path / "r.db") as log:
         result = run_agent(_spec(tools=["echo"], limits=Limits(max_steps=2)), "go",
                            registry=_registry(), client=client, log=log)
+        logged_usage = log.usage(result.run_id)
     assert result.status == "ok"
     assert result.output == "here is what I know"
     assert client.requests[-1].tools == []  # final answer call has tools disabled
+    # The final-answer call is a real completion: its tokens belong to the run,
+    # and the result must agree with the log's own projection.
+    assert result.usage == logged_usage
 
 
 def test_every_step_is_an_event(tmp_path: Path) -> None:
@@ -179,7 +185,14 @@ def test_output_guardrail_can_deny(tmp_path: Path) -> None:
     client = FakeClient([_resp("anything")])
     with EventLog(tmp_path / "r.db") as log:
         result = run_agent(spec, "go", registry=reg, client=client, log=log)
+        events = list(log.events(result.run_id))
+        status = log.runs()[0]["status"]
     assert result.status == "denied"
+    # A denied run still ends: the row is not left running, and the exit is an
+    # event like every other one.
+    assert status == "denied"
+    finished = [e["payload"]["status"] for e in events if e["type"] == "run_finished"]
+    assert finished == ["denied"]
 
 
 def test_tool_result_guardrail_rewrite_is_logged(tmp_path: Path) -> None:
@@ -328,3 +341,49 @@ def test_chained_input_transforms_keep_the_message_shape(tmp_path: Path) -> None
         received = next(e for e in log.events(result.run_id)
                         if e["type"] == "input_received")
     assert received["payload"]["content"] == "go a b"
+
+
+def test_transport_error_ends_the_run_instead_of_escaping(tmp_path: Path) -> None:
+    """ADR-0010: every run ends in a structured, inspectable failure.
+
+    A gateway error used to propagate out of `run_agent`, leaving the run row
+    `running` forever and `RunResult.status == "error"` unreachable.
+    """
+
+    class Broken:
+        name = "broken"
+
+        def complete(self, request: ModelRequest) -> ModelResponse:
+            raise TransportError(503, "gateway down", attempts=3)
+
+        def stream(self, request: ModelRequest, on_error: Any = None) -> Any:
+            raise NotImplementedError
+
+    with EventLog(tmp_path / "r.db") as log:
+        result = run_agent(_spec(), "go", registry=_registry(), client=Broken(), log=log)
+        events = list(log.events(result.run_id))
+        row = log.runs()[0]
+    assert result.status == "error"
+    assert "503" in (result.error or "")
+    assert row["status"] == "error"
+    assert [e["type"] for e in events].count("run_finished") == 1
+    assert any(e["type"] == "error" and e["payload"]["stage"] == "model_request"
+               for e in events)
+
+
+def test_the_loop_closes_a_log_it_created(tmp_path: Path, monkeypatch: Any) -> None:
+    """`owns_log` was computed after `log = log or ...`, so it was always False."""
+
+    class Counting(EventLog):
+        closes = 0
+
+        def close(self) -> None:
+            type(self).closes += 1
+            super().close()
+
+    monkeypatch.setattr(loop_module, "EventLog", Counting)
+    monkeypatch.setattr(loop_module.settings, "db_path", str(tmp_path / "owned.db"))
+    result = loop_module.run_agent(_spec(), "go", registry=_registry(),
+                                   client=FakeClient([_resp("done")]))
+    assert result.status == "ok"
+    assert Counting.closes == 1

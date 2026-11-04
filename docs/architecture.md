@@ -123,6 +123,9 @@ Derived views: `messages` (from `input_received`, `model_response`, `tool_result
 `verdicts` (from `*_verdict`), `usage` (from `model_response.usage`), and the
 replayable transcript exported to `runs/<id>.jsonl`.
 
+`run_finished` is written exactly once on every exit path — `ok`, `denied`,
+`budget_exhausted` and `error` — so the log alone says how a run ended.
+
 **The log is a security boundary.** No payload reaches SQLite without passing
 `redact_event()`; a test asserts that a secret-shaped string in a tool result
 never appears in the database file.
@@ -150,8 +153,8 @@ run: the root span creates it, child spans are aggregated into metrics
 `mlflow` dependency and no extra to install.
 
 For that to be honest, the loop ends the root span on **every** exit path — `ok`,
-`denied`, `budget_exhausted` and output-deny — with `rigging.status` set. A
-run-level backend cannot infer a status it is never told.
+`denied`, `budget_exhausted`, output-deny and a failed model call — with
+`rigging.status` set. A run-level backend cannot infer a status it is never told.
 
 ## 6. Failure semantics
 
