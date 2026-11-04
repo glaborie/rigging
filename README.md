@@ -1,8 +1,7 @@
 # rigging
 
-> Capabilities are declared in a manifest and discovered through a registry.
-> The loop, the gateway, the guardrails, the observability backend and the
-> retriever are all swappable implementations of small protocols.
+> Build your own agent harness. You choose the loop, gateway, guardrails, retriever and tracing backend. 
+> The kit gives you the protocols, the registry, a replayable event log, approval gates and an eval harness.
 
 **Status: v0.7.0 released (2026-11-03).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
@@ -72,7 +71,11 @@ ollama pull qwen3:8b
 # 2. Install (dev + service extras)
 make install
 
-# 3. Run an agent (the no-tools smoke agent)
+# 3. Build your own manifest: an interview, then a validated agent.yaml
+uv run harness init                          # writes agents/<name>/agent.yaml + prompt.md
+uv run harness init --yes --dir /tmp/agents  # or take every suggested default
+
+# 4. Run an agent (the no-tools smoke agent)
 uv run harness run examples/hello/agent.yaml "Say hello in one sentence." --model qwen3:8b
 
 # Interactive chat: one session, many runs, continuous memory
@@ -277,6 +280,7 @@ rigging/            the package (protocols, registry, loop, client, CLI)
   decide/           Laya decision model adapter
   service/          read-only FastAPI + SSE view of the event log (ADR-0018)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
+  init_agent.py     `harness init`: the manifest interview (no new dependency)
 docs/
   architecture.md   how the layers fit and why
   milestones.md     v0.1 → v0.6 with the go-public gate
@@ -315,6 +319,34 @@ uv run harness schema
 The schema ensures manifests have valid structure and documents all
 configurable options. Use it with editor tooling for autocomplete and
 validation.
+
+### Creating one
+
+`harness init` is a configure-style interview: every question lists the real
+choices from the registry, carries a suggested default, and Enter takes it.
+
+```bash
+uv run harness init                      # -> agents/<name>/agent.yaml + prompt.md
+uv run harness init --dir /tmp/agents --yes   # unattended: every default
+```
+
+- **The choices are read, not hardcoded.** Tools, guardrails and retrievers come
+  from the registry, so the menus cannot drift from the code. Selected tools that
+  declare `side_effecting` are written into `approval.side_effecting_tools`
+  automatically, which is the one field a hand-written manifest forgets.
+- **The file is validated before it is written.** The answers are dumped to a
+  temp file and loaded through `load_manifest`, so `harness init` cannot emit a
+  manifest `harness run` would reject. Nothing is written if validation fails.
+- **It never overwrites silently.** An existing `agent.yaml`/`prompt.md` is an
+  error unless you pass `--force`.
+- **The prompt lives in `prompt.md`,** referenced by `system_prompt_file`, so the
+  YAML stays readable in a diff. The generated file's first lines carry a
+  `yaml-language-server: $schema=` comment — a comment because the contract sets
+  `additionalProperties: false` and would reject a real `$schema` key.
+
+It generates the core plus safety block (model, profile, prompt, tools,
+retriever, guardrails per hook, approval, limits, exporters). Skills, `mcp_servers`,
+`subagents` and `parallel_tools` are still hand-written — `examples/` covers each.
 
 ## Third-party capabilities
 
