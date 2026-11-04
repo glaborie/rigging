@@ -2,8 +2,9 @@
 
 Registered on the default registry when a manifest asks for them; backed by the
 seeded SQLite fixture DB (`examples/b2b-support/demo.db`, built by seed.py).
-`refund_order` is side-effecting: the consequential-action guardrail and the
-approval policy gate it before this function ever runs (ADR-0004, ADR-0007).
+`refund_order` and `submit_basket` are side-effecting: the consequential-action
+guardrail and the approval policy gate them before these functions ever run
+(ADR-0004, ADR-0007).
 """
 
 from __future__ import annotations
@@ -67,6 +68,30 @@ def _basket_db() -> sqlite3.Connection:
     db.executescript(BASKET_SCHEMA)
     db.commit()
     return db
+
+
+def _ensure_multiline_orders(db: sqlite3.Connection) -> None:
+    """An order can have several lines; old seeded databases keyed it by order_id alone.
+
+    The rebuild is idempotent and preserves every row: `lookup_order` already
+    returns a list, so only the primary key changes.
+    """
+    row = db.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'orders'"
+    ).fetchone()
+    if row is None or "PRIMARY KEY (order_id, sku)" in row["sql"]:
+        return
+    db.executescript("""
+    ALTER TABLE orders RENAME TO orders_single_line;
+    CREATE TABLE orders(order_id TEXT, sku TEXT, qty INTEGER,
+                        unit_price REAL, status TEXT, delivered_at TEXT, note TEXT,
+                        PRIMARY KEY (order_id, sku));
+    INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note)
+      SELECT order_id, sku, qty, unit_price, status, delivered_at, note
+      FROM orders_single_line;
+    DROP TABLE orders_single_line;
+    """)
+    db.commit()
 
 
 def _now() -> str:
@@ -159,6 +184,65 @@ def clear_basket(basket_id: str) -> str:
                              (basket_id.strip(),)).rowcount
         db.commit()
         return json.dumps({"removed": removed, **_view(db, basket_id.strip())}, indent=1)
+
+
+def _next_order_id(db: sqlite3.Connection) -> str:
+    numbers = [
+        int(row["order_id"][4:])
+        for row in db.execute("SELECT order_id FROM orders")
+        if row["order_id"].startswith("ORD-") and row["order_id"][4:].isdigit()
+    ]
+    return f"ORD-{max(numbers, default=1000) + 1}"
+
+
+@tool(side_effecting=True)
+def submit_basket(basket_id: str) -> str:
+    """Convert a basket into an order. Requires approval. Every line must meet its
+    MOQ and fit stock; the order is recorded as `processing`, unpaid and unshipped."""
+    basket_id = basket_id.strip()
+    with closing(_basket_db()) as db:
+        _ensure_multiline_orders(db)
+        basket = _view(db, basket_id)
+        if not basket["items"]:
+            return f"error: basket {basket_id!r} is empty — add lines with add_to_basket"
+        missing = [item["sku"] for item in basket["items"] if item.get("missing")]
+        if missing:
+            return (f"error: {', '.join(missing)} is no longer in the catalogue — "
+                    "remove the line with update_basket_item before submitting")
+        problems = [
+            f"{item['sku']}: qty {item['qty']} is below MOQ {item['moq']}"
+            if item.get("below_moq") else
+            f"{item['sku']}: qty {item['qty']} exceeds stock {item['stock']}"
+            if item.get("exceeds_stock") else ""
+            for item in basket["items"]
+        ]
+        problems = [problem for problem in problems if problem]
+        if problems:
+            return ("error: cannot submit this basket — " + "; ".join(problems)
+                    + ". Fix the lines with update_basket_item, then submit again.")
+
+        order_id = _next_order_id(db)
+        try:
+            db.executemany(
+                "INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note)"
+                " VALUES (?,?,?,?,?,?,?)",
+                [(order_id, item["sku"], item["qty"], item["unit_price"],
+                  "processing", None, f"from basket {basket_id}")
+                 for item in basket["items"]],
+            )
+            db.execute("DELETE FROM basket_items WHERE basket_id = ?", (basket_id,))
+            db.execute("DELETE FROM baskets WHERE basket_id = ?", (basket_id,))
+            db.commit()
+        except sqlite3.Error as exc:
+            db.rollback()
+            return f"error: could not record the order ({exc}); the basket is unchanged"
+
+        return json.dumps({
+            "order_id": order_id, "status": "processing", "currency": "USD",
+            "basket_id": basket_id, "lines": basket["items"], "total": basket["subtotal"],
+            "lead_days": max(item["lead_days"] for item in basket["items"]),
+            "note": "Order recorded. No payment was taken and nothing has shipped.",
+        }, indent=1)
 
 
 @tool()

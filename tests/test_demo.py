@@ -139,6 +139,68 @@ def test_basket_tables_are_created_on_an_old_seed(demo_db):
     assert out["count"] == 1
 
 
+def test_submit_basket_creates_a_multiline_order(demo_db):
+    first = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 10}))
+    basket_id = first["basket_id"]
+    added = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 10,
+                                               "basket_id": basket_id}))
+
+    out = json.loads(_call("submit_basket", {"basket_id": basket_id}))
+    assert out["order_id"].startswith("ORD-")
+    assert out["status"] == "processing"
+    assert out["total"] == added["subtotal"] == 3591.0
+    assert out["lead_days"] == 15, "a mixed basket quotes the slowest item"
+    assert out["basket_id"] == basket_id
+
+    lines = json.loads(_call("lookup_order", {"order_id": out["order_id"]}))
+    assert {line["sku"] for line in lines} == {"SW-8P-GBE", "SW-24P-GBE"}
+    assert all(line["status"] == "processing" for line in lines)
+    assert {line["note"] for line in lines} == {f"from basket {basket_id}"}
+
+    # the basket is consumed, and submitting it again is an error, not a second order
+    assert json.loads(_call("view_basket", {"basket_id": basket_id}))["count"] == 0
+    assert _call("submit_basket", {"basket_id": basket_id}).startswith("error:")
+
+
+def test_submit_basket_refuses_moq_and_stock_violations(demo_db):
+    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 1}))
+    out = _call("submit_basket", {"basket_id": below["basket_id"]})
+    assert out.startswith("error:") and "MOQ" in out
+
+    over = json.loads(_call("add_to_basket", {"sku": "KVM-IP-16", "qty": 19}))
+    out = _call("submit_basket", {"basket_id": over["basket_id"]})
+    assert out.startswith("error:") and "exceeds stock" in out
+
+    # a refused submit leaves the basket alone, ready for update_basket_item
+    assert json.loads(_call("view_basket", {"basket_id": below["basket_id"]}))["count"] == 1
+
+
+def test_submit_basket_is_side_effecting(demo_db):
+    ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "submit_basket"))
+    assert getattr(ft, "side_effecting", False) is True
+
+
+def test_submit_basket_upgrades_a_single_line_orders_table(demo_db):
+    """An older seed keyed orders by order_id alone; the tool rebuilds it in place."""
+    db = sqlite3.connect(demo_db)
+    db.executescript("""
+    ALTER TABLE orders RENAME TO orders_single_line;
+    CREATE TABLE orders(order_id TEXT PRIMARY KEY, sku TEXT, qty INTEGER,
+                        unit_price REAL, status TEXT, delivered_at TEXT, note TEXT);
+    INSERT INTO orders SELECT order_id, sku, qty, unit_price, status, delivered_at, note
+      FROM orders_single_line;
+    DROP TABLE orders_single_line;
+    """)
+    db.commit()
+    db.close()
+
+    basket = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2}))
+    out = json.loads(_call("submit_basket", {"basket_id": basket["basket_id"]}))
+    assert out["order_id"] == "ORD-1013"
+    assert "ORD-1001" in _call("lookup_order", {"order_id": "ORD-1001"})
+    assert len(json.loads(_call("lookup_order", {"order_id": out["order_id"]}))) == 1
+
+
 def test_refund_is_marked_side_effecting(demo_db):
     ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "refund_order"))
     assert getattr(ft, "side_effecting", False) is True
@@ -159,7 +221,7 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
         "name": "b2b", "model": "test", "system_prompt": "be terse",
         "tools": ["search_policies", "lookup_order", "search_catalogue", "check_pricing",
                   "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
-                  "refund_order", "escalate_to_human"],
+                  "submit_basket", "refund_order", "escalate_to_human"],
         "retriever": {"name": "fts5", "options": {}},
         "limits": {"max_steps": 3},
     }))
@@ -168,7 +230,7 @@ def test_manifest_assembles_with_retriever_and_demo_tools(tmp_path, demo_db, mon
     names = {t.name for t in agent.tools}
     assert {"search_policies", "lookup_order", "search_catalogue", "check_pricing",
             "add_to_basket", "view_basket", "update_basket_item", "clear_basket",
-            "refund_order", "escalate_to_human"} <= names
+            "submit_basket", "refund_order", "escalate_to_human"} <= names
     escalate = next(t for t in agent.tools if t.name == "escalate_to_human")
     facts = escalate.json_schema["function"]["parameters"]["properties"]["facts"]
     assert facts["type"] == "object"  # `dict | None` keeps its type in the schema

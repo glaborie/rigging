@@ -21,6 +21,7 @@ tools:
   - view_basket
   - update_basket_item
   - clear_basket
+  - submit_basket
   - refund_order
   - load_skill
   - escalate_to_human
@@ -53,6 +54,7 @@ approval:
   policy: cli
   side_effecting_tools:
     - refund_order
+    - submit_basket
 
 limits:
   max_steps: 20

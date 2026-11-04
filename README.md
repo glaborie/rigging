@@ -87,7 +87,7 @@ uv run harness escalations
 # Offline: replay a recorded transcript instead of calling the API
 uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
 
-# The canonical demo: 11 tools, 2 skills, FTS5 retrieval, 5 guardrail hooks, approval
+# The canonical demo: 12 tools, 2 skills, FTS5 retrieval, 5 guardrail hooks, approval
 make seed                                        # deterministic demo.db (seed=7)
 make demo PROMPT="What is the refund policy for ORD-1002?"   # deepseek via OpenRouter
 make demo MODEL=qwen3:8b PROFILE=ollama PROMPT="What is the refund policy for ORD-1002?"
