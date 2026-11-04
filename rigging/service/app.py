@@ -117,40 +117,41 @@ def _sse(data: dict[str, Any]) -> str:
 def _tail(db: str | Path, run_id: str, idle_seconds: float, max_seconds: float) -> Iterator[str]:
     """Replay the run's events, then follow it until it finishes or goes quiet.
 
-    One read-only connection serves the whole stream; polling it every
-    `POLL_INTERVAL_S` is cheaper than reconnecting twice per tick.
+    Each poll opens and closes its own read-only connection. Holding one across
+    `yield` is unsafe: when a client disconnects, Starlette finalises the
+    generator on another thread, and SQLite refuses a close from a foreign
+    thread.
     """
     yield "retry: 2000\n\n"
     seq = 0
     began = time.monotonic()
     quiet_since = began
-    with closing(_connect(db)) as conn:
-        while True:
-            batch = _event_rows(conn, run_id, after_seq=seq)
-            for ev in batch:
-                seq = ev["seq"]
-                yield _sse(ev)
-            if batch:
-                quiet_since = time.monotonic()
+    while True:
+        batch = events(db, run_id, after_seq=seq)
+        for ev in batch:
+            seq = ev["seq"]
+            yield _sse(ev)
+        if batch:
+            quiet_since = time.monotonic()
 
-            row = _run_row(conn, run_id)
-            if row is None:
-                yield "event: end\ndata: {\"reason\": \"run disappeared\"}\n\n"
-                return
-            if row["status"] != "running" and not batch:
-                yield (f"event: end\ndata: {{\"reason\": \"run finished\", "
-                       f"\"status\": \"{row['status']}\"}}\n\n")
-                return
+        row = run(db, run_id)
+        if row is None:
+            yield "event: end\ndata: {\"reason\": \"run disappeared\"}\n\n"
+            return
+        if row["status"] != "running" and not batch:
+            yield (f"event: end\ndata: {{\"reason\": \"run finished\", "
+                   f"\"status\": \"{row['status']}\"}}\n\n")
+            return
 
-            now = time.monotonic()
-            if now - began > max_seconds:
-                yield "event: end\ndata: {\"reason\": \"max_seconds\"}\n\n"
-                return
-            if now - quiet_since > idle_seconds:
-                # Still running: end the stream and let the page reopen it on demand.
-                yield "event: end\ndata: {\"reason\": \"idle\"}\n\n"
-                return
-            time.sleep(POLL_INTERVAL_S)
+        now = time.monotonic()
+        if now - began > max_seconds:
+            yield "event: end\ndata: {\"reason\": \"max_seconds\"}\n\n"
+            return
+        if now - quiet_since > idle_seconds:
+            # Still running: end the stream and let the page reopen it on demand.
+            yield "event: end\ndata: {\"reason\": \"idle\"}\n\n"
+            return
+        time.sleep(POLL_INTERVAL_S)
 
 
 def _is_loopback(host: str) -> bool:
