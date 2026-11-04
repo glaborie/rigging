@@ -46,6 +46,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--model", default=None, help="override the manifest's model")
     run.add_argument("--profile", default=None,
                      help="override the manifest credential_profile (e.g. openrouter)")
+    run.add_argument("--export", action="append", default=None, metavar="NAME",
+                     help="override the manifest exporters (repeatable, e.g. --export langfuse)")
     run.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
     run.add_argument("--defaults", default=None, help="harness.yaml to merge under the manifest")
     run.add_argument("--session", default=None, help="continue an existing session id")
@@ -95,6 +97,8 @@ def _parser() -> argparse.ArgumentParser:
     chat.add_argument("--model", default=None, help="override the manifest's model")
     chat.add_argument("--profile", default=None,
                       help="override the manifest credential_profile (e.g. default)")
+    chat.add_argument("--export", action="append", default=None, metavar="NAME",
+                      help="override the manifest exporters (repeatable, e.g. --export langfuse)")
     chat.add_argument("--show-reasoning", action="store_true")
 
     serve = sub.add_parser("serve", help="web view of the event log; --manifest adds chat")
@@ -104,6 +108,8 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--model", default=None, help="override the manifest's model (chat)")
     serve.add_argument("--profile", default=None,
                        help="override the manifest credential_profile (chat)")
+    serve.add_argument("--export", action="append", default=None, metavar="NAME",
+                       help="override the manifest exporters (chat; repeatable, e.g. langfuse)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     serve.add_argument("--port", type=int, default=8000)
     serve.add_argument("--ssl-certfile", default=None,
@@ -127,15 +133,29 @@ def _parser() -> argparse.ArgumentParser:
     return p
 
 
+def _with_overrides(spec: AgentSpec, args: argparse.Namespace) -> AgentSpec:
+    """Apply `--model` / `--profile` / `--export` to a loaded manifest.
+
+    One helper so `run`, `chat` and `serve` cannot drift on override semantics;
+    `eval` resolves the same three through its suite runner.
+    """
+    if getattr(args, "model", None):
+        spec = spec.model_copy(update={"model": args.model})
+    if getattr(args, "profile", None):
+        spec = spec.model_copy(update={"credential_profile": args.profile})
+    if getattr(args, "export", None):
+        spec = spec.model_copy(update={
+            "observability": spec.observability.model_copy(
+                update={"exporters": list(args.export)})})
+    return spec
+
+
 def cmd_run(args: argparse.Namespace) -> int:
     from rigging.approvals import ScriptedApproval
     from rigging.loop import run_agent
 
-    spec: AgentSpec = load_manifest(args.manifest, defaults_path=args.defaults)
-    if args.model:
-        spec = spec.model_copy(update={"model": args.model})
-    if args.profile:
-        spec = spec.model_copy(update={"credential_profile": args.profile})
+    spec: AgentSpec = _with_overrides(
+        load_manifest(args.manifest, defaults_path=args.defaults), args)
 
     stream = None if args.json else _delta_printer(args.show_reasoning)
     client = None
@@ -217,11 +237,7 @@ def cmd_index(args: argparse.Namespace) -> int:
 def cmd_chat(args: argparse.Namespace) -> int:
     from rigging.chat import chat
 
-    spec = load_manifest(args.manifest)
-    if args.model:
-        spec = spec.model_copy(update={"model": args.model})
-    if args.profile:
-        spec = spec.model_copy(update={"credential_profile": args.profile})
+    spec = _with_overrides(load_manifest(args.manifest), args)
     with EventLog(args.db or settings.db_path) as log:
         return chat(spec, log=log, session_id=args.session,
                     stream=_delta_printer(args.show_reasoning))
@@ -331,11 +347,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     if args.manifest:
         from rigging.service.chat import ChatRunner
 
-        spec = load_manifest(args.manifest)
-        if args.model:
-            spec = spec.model_copy(update={"model": args.model})
-        if args.profile:
-            spec = spec.model_copy(update={"credential_profile": args.profile})
+        spec = _with_overrides(load_manifest(args.manifest), args)
         if not settings.service_token.strip():
             print("chat needs RIGGING_SERVICE_TOKEN: any page the browser visits can "
                   "POST to a loopback port (ADR-0023). Set a token, or drop --manifest "

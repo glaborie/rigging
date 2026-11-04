@@ -93,18 +93,21 @@ make demo PROMPT="What is the refund policy for ORD-1002?"   # deepseek via Open
 make demo MODEL=qwen3:8b PROFILE=ollama PROMPT="What is the refund policy for ORD-1002?"
 make eval                                        # event-log predicates, per-case table
 make eval EXPORT=langfuse                        # ...and one Langfuse trace per case
+make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b PROFILE=ollama          # the fully local path
 
 # Drive the same agent from a browser: type, watch the tools run, approve a refund
-RIGGING_SERVICE_TOKEN=demo make web
+RIGGING_SERVICE_TOKEN=demo make web              # add EXPORT=langfuse for one trace per turn
 # http://127.0.0.1:8000 — token "demo"
 ```
 
-`MODEL=` and `PROFILE=` override the manifest's model and `credential_profile`
-for any target (`run`, `chat`, `eval`, `serve`/`web`). The demo pins
-`deepseek/deepseek-v4.1-flash` through the `openrouter` profile; `PROFILE=ollama`
-and a model Ollama serves (`qwen3:8b`) is the offline path. `harness run` takes
-the same `--model` / `--profile` pair.
+`MODEL=`, `PROFILE=` and `EXPORT=` override the manifest's model,
+`credential_profile` and exporters for `run`, `chat`, `eval` and `serve`/`web`
+(`harness run|chat|serve --export langfuse` is the same switch). Traces go to
+Langfuse Cloud using the `LANGFUSE_*` keys in `.env`; `make trace` runs an agent
+and prints the spans it produced. The demo pins `deepseek/deepseek-v4.1-flash`
+through the `openrouter` profile; `PROFILE=ollama` and a model Ollama serves
+(`qwen3:8b`) is the offline path.
 
 For a multi-model, multi-repeat table — and the model-id syntax that goes with
 it — see [`BENCHMARKING.md`](BENCHMARKING.md).

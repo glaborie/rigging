@@ -4,6 +4,7 @@
 #   MANIFEST=examples/hello/agent.yaml     which agent to run (make web defaults to b2b-support)
 #   PROMPT="..."                           the user message
 #   MODEL=qwen3:8b                         override the manifest's model
+#   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT=langfuse)
 #   APPROVE=0|1                            allow side-effecting tools without asking (demo only)
 #   DB=other.db                            alternate SQLite event log
 #
@@ -20,6 +21,7 @@ MANIFEST ?= examples/hello/agent.yaml
 WEB_MANIFEST ?= examples/b2b-support/agent.yaml
 PROMPT   ?= say hello in one sentence
 MODEL    ?=
+EXPORT   ?=
 HELLO_MODEL ?= freellm/codestral   # proven live through OmniRoute -> freellmapi
 DB       ?=
 APPROVE  ?= 0
@@ -100,10 +102,10 @@ observability: ## check the Langfuse Cloud credentials in .env (emits nothing)
 	 printf 'credentials and OTel exporter look set. this target runs no agent, so it emits no spans.\n'; \
 	 printf 'next: make trace  (runs the observability example, then reads the spans back)\n'
 
-trace: ## run the observability example, then read its spans back from Langfuse Cloud
+trace: ## run an agent with Langfuse spans, then read them back: make trace [MANIFEST=... PROMPT="..."]
 	@marker="$${TMPDIR:-/tmp}/rigging-trace-marker"; rm -f "$$marker"; touch "$$marker"; \
-	 uv run harness run examples/observability/agent.yaml "$(PROMPT)" \
-	   $(if $(MODEL),--model $(MODEL),) || exit $$?; \
+	 uv run harness run $(if $(filter file,$(origin MANIFEST)),$(MANIFEST),examples/observability/agent.yaml) "$(PROMPT)" \
+	   $(if $(MODEL),--model $(MODEL),) --export langfuse || exit $$?; \
 	 uv run python scripts/langfuse_tail.py --since-file "$$marker" --wait 90
 
 atif: ## export a Langfuse session as an ATIF trajectory: make atif SESSION=s_abc123 [HARBOR=runs/harbor]
@@ -118,6 +120,7 @@ hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
 	  $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(if $(EXPORT),--export $(EXPORT),) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
 
 record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
@@ -130,11 +133,13 @@ serve: ## read-only web view of the event log: http://127.0.0.1:8000
 web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN)
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
 	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
-	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),)
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(if $(EXPORT),--export $(EXPORT),)
 
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),) \
-	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),)
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(if $(EXPORT),--export $(EXPORT),)
 
 seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
 	uv run python examples/b2b-support/seed.py
@@ -145,7 +150,7 @@ index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds f
 demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make seed)
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(filter 1,$(APPROVE)),--yes,)
+	  $(if $(EXPORT),--export $(EXPORT),) $(if $(filter 1,$(APPROVE)),--yes,)
 
 eval: ## run the b2b-support eval suite: make eval [SUITE=...] [EXPORT=langfuse] [PROFILE=ollama]
 	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),) $(if $(PROFILE),--profile $(PROFILE),)

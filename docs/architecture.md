@@ -146,6 +146,13 @@ Spans follow OTel `gen_ai.*` conventions so any backend works:
 Langfuse is the first OTLP target, MLflow the second. Both are `Exporter`
 implementations; neither is imported by the loop.
 
+A manifest enables them with `observability: {exporters: [langfuse], capture_content: true}`.
+`harness run|chat|serve --export langfuse` (and `make demo|web|eval EXPORT=langfuse`)
+overlays the list at assembly time, so the shared demo manifest stays key-free and
+`make check` needs no credentials. A missing `[langfuse]` extra is the silent
+case — the loop treats a broken exporter as non-fatal, so the run succeeds with
+no spans — while missing `LANGFUSE_*` keys fail at assembly.
+
 The two backends see different shapes, on purpose (ADR-0020). Langfuse ingests
 spans. MLflow tracks runs, so `MLflowExporter` maps one rigging run to one MLflow
 run: the root span creates it, child spans are aggregated into metrics

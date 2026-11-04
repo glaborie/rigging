@@ -62,8 +62,9 @@ limits:
   max_cost_usd: 0.50
   max_wall_clock_s: 180
 
-# Zero-credential default: no exporters. For traces, set the LANGFUSE_* vars and
-# swap to `exporters: [langfuse]` (see examples/observability/agent.yaml).
+# No exporters by default: `make demo|web|eval EXPORT=langfuse` (or
+# `harness run|chat|serve --export langfuse`) overlays this list at assembly
+# time, so the manifest stays key-free (ADR-0012).
 observability:
   exporters: []
   capture_content: true

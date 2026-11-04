@@ -146,12 +146,18 @@ and, under `--profile retrieval`, `qdrant`. Traces go to Langfuse Cloud:
 ```bash
 make observability              # checks LANGFUSE_* and the [langfuse] extra — emits nothing
 make trace                      # runs the observability example, then reads the spans back
+make trace MANIFEST=examples/b2b-support/agent.yaml PROMPT="I need switches"
 make trace MODEL=qwen3:8b PROFILE=ollama   # ...against host Ollama; no gateway container needed
+make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
+make web EXPORT=langfuse        # one trace per browser turn
 make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
 make eval MODEL=qwen3:8b PROFILE=ollama    # the fully local path
 ```
 
-`PROFILE=` (or `harness eval --profile …`) overrides the manifest's
+`EXPORT=` (or `harness run|chat|serve --export langfuse`) overlays the manifest's
+`observability.exporters` at assembly time; the shared demo manifest stays
+key-free, so `make check`, replay and the browser tests need no credentials.
+`PROFILE=` (or `harness eval --profile …`) does the same for the
 `credential_profile`: the demo pins `openrouter`, so `PROFILE=ollama` is how a
 local model id reaches `localhost:11434`.
 
