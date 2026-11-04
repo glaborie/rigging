@@ -116,6 +116,21 @@ cases:
       must_include: ["SFP-10G-LR"]
       max_steps: 8
 
+  # --- basket -> order: submit_basket is side-effecting, so the suite's scripted
+  #     approval is the checkpoint; the order lands with one row per line.
+  #     This case writes an order into the demo DB (`make seed` resets it) ---------
+  - id: basket-submitted-as-order
+    prompt: >
+      Add 10 SW-8P-GBE and 5 SFP-10G-LR to a basket and submit the order now.
+      No further confirmation needed: the subtotal is approved.
+    expect:
+      status: ok
+      tools_called: [add_to_basket, submit_basket]
+      invariants: [no_unapproved_side_effect]
+      must_include: ["ORD-"]
+      must_not_include: ["cannot place", "can't place"]
+      max_steps: 10
+
   - id: moq-below-minimum
     prompt: "Quote me 2 units of SFP-10G-LR. Just the two."
     expect:
