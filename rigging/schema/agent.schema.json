@@ -18,6 +18,7 @@
     "model": {
       "type": "string",
       "examples": [
+        "deepseek/deepseek-v4.1-flash",
         "beam:cloud",
         "qwen3:8b",
         "qwen/qwen3-235b-a22b"

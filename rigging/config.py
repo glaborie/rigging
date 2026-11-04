@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     # default gateway: OmniRoute locally, or Ollama's OpenAI-compatible surface
     base_url: str = "http://localhost:20128/v1"
     api_key: str = "not-needed"
-    model: str = "beam:cloud"
+    model: str = "deepseek/deepseek-v4.1-flash"
 
     # FreeLLMAPI decision endpoint (SystemOne API, not chat completions)
     freellm_base_url: str = Field(

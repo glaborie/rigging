@@ -44,6 +44,8 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("manifest", help="path to agent.yaml")
     run.add_argument("prompt", help="the user message")
     run.add_argument("--model", default=None, help="override the manifest's model")
+    run.add_argument("--profile", default=None,
+                     help="override the manifest credential_profile (e.g. openrouter)")
     run.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
     run.add_argument("--defaults", default=None, help="harness.yaml to merge under the manifest")
     run.add_argument("--session", default=None, help="continue an existing session id")
@@ -132,6 +134,8 @@ def cmd_run(args: argparse.Namespace) -> int:
     spec: AgentSpec = load_manifest(args.manifest, defaults_path=args.defaults)
     if args.model:
         spec = spec.model_copy(update={"model": args.model})
+    if args.profile:
+        spec = spec.model_copy(update={"credential_profile": args.profile})
 
     stream = None if args.json else _delta_printer(args.show_reasoning)
     client = None

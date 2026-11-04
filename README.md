@@ -63,9 +63,9 @@ a YAML file. Swapping Qdrant for anything else is one class.
 ## Quickstart
 
 ```bash
-# 1. Model access — pick one
-ollama signin                              # beam:cloud, free at time of writing
-# or the fully local path:
+# 1. Model access — the canonical demo needs an OpenRouter key
+#    RIGGING_PROFILE_OPENROUTER_API_KEY=sk-or-...   (in .env)
+# Fully local alternative for the smoke agent:
 ollama pull qwen3:8b
 
 # 2. Install (dev + service extras)
@@ -89,26 +89,29 @@ uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transc
 
 # The canonical demo: 11 tools, 2 skills, FTS5 retrieval, 5 guardrail hooks, approval
 make seed                                        # deterministic demo.db (seed=7)
-make demo MODEL=qwen3:8b PROMPT="What is the refund policy for ORD-1002?"
-make eval MODEL=qwen3:8b                          # event-log predicates, per-case table
-make eval MODEL=qwen3:8b EXPORT=langfuse          # ...and one Langfuse trace per case
-make eval MODEL=opencode-go/deepseek-v4.1-flash PROFILE=default   # via OmniRoute
+make demo PROMPT="What is the refund policy for ORD-1002?"   # deepseek via OpenRouter
+make demo MODEL=qwen3:8b PROFILE=ollama PROMPT="What is the refund policy for ORD-1002?"
+make eval                                        # event-log predicates, per-case table
+make eval EXPORT=langfuse                        # ...and one Langfuse trace per case
+make eval MODEL=qwen3:8b PROFILE=ollama          # the fully local path
 
 # Drive the same agent from a browser: type, watch the tools run, approve a refund
-RIGGING_SERVICE_TOKEN=demo make web MODEL=opencode-go/deepseek-v4.1-flash PROFILE=default
+RIGGING_SERVICE_TOKEN=demo make web
 # http://127.0.0.1:8000 — token "demo"
 ```
 
-`PROFILE=default` (or `harness eval --profile default`) overrides the manifest's
-`credential_profile`, so a hosted model goes to `RIGGING_BASE_URL` (OmniRoute)
-instead of the local Ollama profile the demo pins.
+`MODEL=` and `PROFILE=` override the manifest's model and `credential_profile`
+for any target (`run`, `chat`, `eval`, `serve`/`web`). The demo pins
+`deepseek/deepseek-v4.1-flash` through the `openrouter` profile; `PROFILE=ollama`
+and a model Ollama serves (`qwen3:8b`) is the offline path. `harness run` takes
+the same `--model` / `--profile` pair.
 
 For a multi-model, multi-repeat table — and the model-id syntax that goes with
 it — see [`BENCHMARKING.md`](BENCHMARKING.md).
 
-No API key is required for either path. The gateway is OpenAI-compatible HTTP,
-so pointing `RIGGING_BASE_URL` at OmniRoute, vLLM, LM Studio or Ollama's own
-`/v1` is all it takes to switch providers.
+The gateway is OpenAI-compatible HTTP, so pointing `RIGGING_BASE_URL` at
+OmniRoute, vLLM, LM Studio or Ollama's own `/v1` is all it takes to switch
+providers; a named profile in `.env` keeps the key next to the base URL.
 
 ## Trajectories (ATIF)
 

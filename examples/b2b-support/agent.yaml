@@ -3,8 +3,8 @@
 name: b2b-support
 description: Answers B2B procurement, pricing and refund questions; escalates to a human when out of policy or uncertain.
 
-model: beam:cloud
-credential_profile: ollama
+model: deepseek/deepseek-v4.1-flash
+credential_profile: openrouter
 
 system_prompt_file: prompt.md
 skills_dir: skills

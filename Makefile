@@ -8,8 +8,9 @@
 #   DB=other.db                            alternate SQLite event log
 #
 # Gateway options (pick one, both are OpenAI-compatible HTTP):
+#   OpenRouter          the demo default — set RIGGING_PROFILE_OPENROUTER_API_KEY in .env
 #   make gateway        OmniRoute in Docker on :20128 — 375 providers, one endpoint
-#   ollama signin       host Ollama on :11434 — no Docker, needs `beam:cloud` or a pulled model
+#   ollama pull qwen3:8b   host Ollama on :11434, no Docker, fully local (PROFILE=ollama)
 #   RIGGING_BASE_URL=<any /v1 URL>   vLLM, LM Studio, OpenRouter, a friend's proxy
 
 .DEFAULT_GOAL := help
@@ -38,9 +39,9 @@ help: ## show this help
 	@printf '  uv sync --extra dev      core + test/lint tooling (make install adds service, mcp)\n'
 	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser]\n'
 	@printf '\nModel access (one is enough):\n'
-	@printf '  ollama signin            beam:cloud, free at time of writing, no API key\n'
+	@printf '  RIGGING_PROFILE_OPENROUTER_API_KEY=...   in .env — the demo default (deepseek)\n'
 	@printf '  ollama pull qwen3:8b     fully local, the weakest model the demo must pass on\n'
-	@printf '  RIGGING_PROFILE_OPENROUTER_API_KEY=...   in .env, for better quality\n'
+	@printf '  PROFILE=ollama           route a local model to host Ollama on :11434\n'
 	@printf '\nCompose profiles:\n'
 	@printf '  (default)      omniroute only — smallest footprint, enough to run an agent\n'
 	@printf '  retrieval      + qdrant on :6345 (6333/6335/6340 are taken by other stacks)\n'
@@ -116,6 +117,7 @@ hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples
 
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
+	  $(if $(PROFILE),--profile $(PROFILE),) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
 
 record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
@@ -142,9 +144,10 @@ index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds f
 
 demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make seed)
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
-	  $(if $(MODEL),--model $(MODEL),) $(if $(filter 1,$(APPROVE)),--yes,)
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(if $(filter 1,$(APPROVE)),--yes,)
 
-eval: ## run the b2b-support eval suite over the event log: make eval SUITE=... EXPORT=langfuse PROFILE=default
+eval: ## run the b2b-support eval suite: make eval [SUITE=...] [EXPORT=langfuse] [PROFILE=ollama]
 	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),) $(if $(PROFILE),--profile $(PROFILE),)
 
 up: gateway ## alias for `make gateway`

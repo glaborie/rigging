@@ -4,6 +4,11 @@
 beam:cloud:
   input: 0.0
   output: 0.0
+# OpenRouter list price, read 2026-11-04. Cache reads are billed lower; the cost
+# here is the conservative upper bound (ADR-0011).
+deepseek/deepseek-v4.1-flash:
+  input: 0.045
+  output: 0.50
 qwen3:8b:
   input: 0.0
   output: 0.0

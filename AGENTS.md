@@ -117,8 +117,11 @@ uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see be
 
 The harness is gateway-agnostic; `RIGGING_BASE_URL` decides. Defaults assume an
 OpenAI-compatible endpoint on `:20128` (OmniRoute, `make gateway`) or Ollama's own
-`/v1` on `:11434`. Default model is `beam:cloud` (free at time of writing, needs
-`ollama signin`); `qwen3:8b` is the fully local fallback.
+`/v1` on `:11434`. The canonical demo's model is `deepseek/deepseek-v4.1-flash`
+through the `openrouter` profile (needs `RIGGING_PROFILE_OPENROUTER_API_KEY`);
+`qwen3:8b` with `PROFILE=ollama` is the fully local fallback. `beam:cloud` is no
+longer the default: it returns empty completions often enough that the loop has
+to fail the run (ADR-0016 amendment).
 
 ### Quickstart options
 
@@ -142,14 +145,14 @@ and, under `--profile retrieval`, `qdrant`. Traces go to Langfuse Cloud:
 ```bash
 make observability              # checks LANGFUSE_* and the [langfuse] extra — emits nothing
 make trace                      # runs the observability example, then reads the spans back
-make trace MODEL=qwen3:8b       # ...against host Ollama; no gateway container needed
+make trace MODEL=qwen3:8b PROFILE=ollama   # ...against host Ollama; no gateway container needed
 make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
-make eval PROFILE=default MODEL=openrouter/...   # hosted model via OmniRoute, not Ollama
+make eval MODEL=qwen3:8b PROFILE=ollama    # the fully local path
 ```
 
-`PROFILE=default` (or `harness eval --profile default`) overrides the manifest's
-`credential_profile`: the demo pins Ollama for zero-credential runs, so a hosted
-model id would otherwise be sent to `localhost:11434` and 404.
+`PROFILE=` (or `harness eval --profile …`) overrides the manifest's
+`credential_profile`: the demo pins `openrouter`, so `PROFILE=ollama` is how a
+local model id reaches `localhost:11434`.
 
 The exporter needs the `[langfuse]` extra, which `make install` does not pull:
 `uv sync --extra dev --extra langfuse` (add `--extra service --extra mcp` if you
