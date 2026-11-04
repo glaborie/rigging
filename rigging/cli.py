@@ -378,7 +378,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print("rate limit: "
           + (f"{settings.service_rate_limit}/min per client"
              if settings.service_rate_limit > 0 else "off"))
-    print(f"proxy trust: {trusted} (X-Forwarded-For sets the rate-limit key)"
+    print("proxy trust: configured (X-Forwarded-For sets the rate-limit key)"
           if trusted.strip() else
           "proxy trust: off — every client shares the socket peer's bucket")
     uvicorn.run(
