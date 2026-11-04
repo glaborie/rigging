@@ -19,7 +19,7 @@ from typing import Any
 from rigging.config import settings
 from rigging.errors import ManifestError
 from rigging.manifest import AgentSpec, SubagentCfg, load_manifest
-from rigging.types import ToolCall, ToolResult
+from rigging.types import RunContext, ToolCall, ToolResult
 
 #: A child's answer is pasted into the parent's context; cap it rather than
 #: letting one chatty subagent eat the parent's whole budget.
@@ -82,7 +82,7 @@ class SpawnTool:
         self._approval = approval
         self._prices = prices
 
-    def run(self, call: ToolCall) -> ToolResult:
+    def run(self, call: ToolCall, ctx: RunContext | None = None) -> ToolResult:
         task = call.arguments.get("task")
         if not isinstance(task, str) or not task.strip():
             return ToolResult.error(call, "spawn needs a non-empty `task` string")

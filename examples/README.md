@@ -13,6 +13,7 @@ It exercises every layer of the harness at once:
 | registry | all capabilities resolved by name from the manifest |
 | skills | two skills, index-only in the prompt, body fetched by `load_skill` |
 | retrieval | policies via FTS5 (`search_policies`; Qdrant is the upgrade path) |
+| state | one basket per session; tools read the loop's `RunContext` (ADR-0024) |
 | guardrails | PII on input/output, injection on tool results, approval threshold, commitment check |
 | approval | `refund_order` and `submit_basket` cannot run without an operator answer |
 | escalation | `escalate_to_human` produces a structured handoff |

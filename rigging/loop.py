@@ -34,6 +34,7 @@ from rigging.types import (
     ModelDelta,
     ModelRequest,
     ModelResponse,
+    RunContext,
     RunResult,
     ToolCall,
     ToolResult,
@@ -369,6 +370,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     session_id = log.start_session(session_id, title=spec.name, spec_hash=spec.spec_hash)
     run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
                            parent_run_id=parent_run_id, run_id=run_id)
+    ctx = RunContext(session_id=session_id, run_id=run_id)
 
     def _finish(status: str, **extra: Any) -> None:
         """The `run_finished` event, written once per run (hard rule 2)."""
@@ -541,10 +543,11 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         used_tools.update(c.name for c in response.tool_calls)
 
         if spec.parallel_tools and len(response.tool_calls) > 1:
-            messages.extend(_execute_calls_parallel(response.tool_calls, tools, agent, log, run_id))
+            messages.extend(_execute_calls_parallel(response.tool_calls, tools, agent, log,
+                                                    run_id, ctx))
         else:
             for call in response.tool_calls:
-                messages.append(_execute_call(call, tools, agent, log, run_id))
+                messages.append(_execute_call(call, tools, agent, log, run_id, ctx))
 
     else:
         exhausted = "max_steps"
@@ -632,10 +635,10 @@ class _CallJob:
     span: Any
 
 
-def _run_tool(tool: Any, call: ToolCall) -> ToolResult:
+def _run_tool(tool: Any, call: ToolCall, ctx: RunContext) -> ToolResult:
     """Hard rule 3 for third-party Tool implementations too, not just FunctionTool."""
     try:
-        return tool.run(call)  # type: ignore[no-any-return]
+        return tool.run(call, ctx)  # type: ignore[no-any-return]
     except Exception as exc:
         return ToolResult.error(call, f"{type(exc).__name__}: {exc}")
 
@@ -704,14 +707,15 @@ def _finish_call(job: _CallJob, result: ToolResult, agent: Assembled, log: Event
 
 
 def _execute_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog,
-                  run_id: str) -> Message:
+                  run_id: str, ctx: RunContext) -> Message:
     job, early = _prepare_call(call, tools, agent, log, run_id)
-    result = early if early is not None else _run_tool(job.tool, job.call)
+    result = early if early is not None else _run_tool(job.tool, job.call, ctx)
     return _finish_call(job, result, agent, log, run_id)
 
 
 def _execute_calls_parallel(calls: list[ToolCall], tools: dict[str, Any], agent: Assembled,
-                            log: EventLog, run_id: str, max_workers: int = 8) -> list[Message]:
+                            log: EventLog, run_id: str, ctx: RunContext,
+                            max_workers: int = 8) -> list[Message]:
     """Prepare serially, run concurrently, finish serially (ADR-0022).
 
     Approvals happen before any tool starts, so a consequential call cannot race
@@ -729,7 +733,7 @@ def _execute_calls_parallel(calls: list[ToolCall], tools: dict[str, Any], agent:
     runnable = [(index, job) for index, job in enumerate(jobs) if results[index] is None]
     if runnable:
         with ThreadPoolExecutor(max_workers=min(max_workers, len(runnable))) as pool:
-            futures = {pool.submit(_run_tool, job.tool, job.call): index
+            futures = {pool.submit(_run_tool, job.tool, job.call, ctx): index
                        for index, job in runnable}
             for future, index in futures.items():
                 results[index] = future.result()

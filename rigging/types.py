@@ -11,11 +11,25 @@ from __future__ import annotations
 
 import json
 import time
+from dataclasses import dataclass
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
 Role = Literal["system", "user", "assistant", "tool"]
+
+
+@dataclass(frozen=True)
+class RunContext:
+    """Where a tool call is happening: the session and run it belongs to.
+
+    Passed by the loop, never by the model (ADR-0024). A tool that needs
+    conversation-scoped state — the demo's basket is one per session — reads it
+    from here instead of asking the model to repeat an opaque id.
+    """
+
+    session_id: str
+    run_id: str
 
 
 class ToolCall(BaseModel):

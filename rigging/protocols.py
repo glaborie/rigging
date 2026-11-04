@@ -18,6 +18,7 @@ from rigging.types import (
     ModelDelta,
     ModelRequest,
     ModelResponse,
+    RunContext,
     ToolCall,
     ToolResult,
 )
@@ -52,7 +53,9 @@ class Tool(Protocol):
     json_schema: dict[str, Any]
     side_effecting: bool
 
-    def run(self, call: ToolCall) -> ToolResult: ...
+    def run(self, call: ToolCall, ctx: RunContext | None = None) -> ToolResult:
+        """Execute the call. `ctx` is loop-supplied scope (ADR-0024), not model input."""
+        ...
 
 
 @runtime_checkable

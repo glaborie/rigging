@@ -14,9 +14,30 @@ import typing
 from collections.abc import Callable, Sequence
 from typing import Any
 
-from rigging.types import ToolCall, ToolResult
+from rigging.types import RunContext, ToolCall, ToolResult
 
 _PRIMITIVES: dict[Any, str] = {str: "string", int: "integer", float: "number", bool: "boolean"}
+
+
+def _type_hints(fn: Callable[..., Any]) -> dict[str, Any]:
+    try:  # PEP 563: annotations arrive as strings; resolve them once
+        return typing.get_type_hints(fn)
+    except Exception:
+        return {}
+
+
+def context_parameter(fn: Callable[..., Any]) -> str | None:
+    """The parameter the loop injects a `RunContext` into (ADR-0024).
+
+    It is never advertised to the model: the schema describes what the model may
+    send, and the model never sends its own session id.
+    """
+    hints = _type_hints(fn)
+    for name, param in inspect.signature(fn).parameters.items():
+        annotation = hints.get(name, param.annotation)
+        if annotation is RunContext:
+            return name
+    return None
 
 
 def _json_type(annotation: Any) -> dict[str, Any]:
@@ -42,14 +63,14 @@ def _json_type(annotation: Any) -> dict[str, Any]:
 def schema_from_callable(fn: Callable[..., Any]) -> dict[str, Any]:
     """Build an OpenAI function schema from a decorated function's signature."""
     meta = getattr(fn, "__rigging_tool__", {})
-    try:  # PEP 563: annotations arrive as strings; resolve them once
-        hints = typing.get_type_hints(fn)
-    except Exception:
-        hints = {}
+    hints = _type_hints(fn)
     signature = inspect.signature(fn)
+    injected = context_parameter(fn)
     properties: dict[str, Any] = {}
     required: list[str] = []
     for name, param in signature.parameters.items():
+        if name == injected:
+            continue
         annotation: Any = hints.get(name, param.annotation)
         entry = _json_type(annotation if annotation is not inspect.Parameter.empty else str)
         if param.default is not inspect.Parameter.empty:
@@ -76,14 +97,18 @@ class FunctionTool:
         self.name: str = str(meta.get("name") or getattr(fn, "__name__", "tool"))
         self.description: str = str(meta.get("description") or (inspect.getdoc(fn) or ""))
         self.side_effecting: bool = bool(meta.get("side_effecting", False))
+        self._ctx_param = context_parameter(fn)
         self.json_schema = schema_from_callable(fn)
 
-    def run(self, call: ToolCall) -> ToolResult:
+    def run(self, call: ToolCall, ctx: RunContext | None = None) -> ToolResult:
         import time
 
         started = time.perf_counter()
+        kwargs = dict(call.arguments)
+        if self._ctx_param is not None:
+            kwargs[self._ctx_param] = ctx
         try:
-            result = self.fn(**call.arguments)
+            result = self.fn(**kwargs)
         except TypeError as exc:  # bad args from the model
             return ToolResult.error(call, f"invalid arguments: {exc}")
         except Exception as exc:  # any tool failure, never a crash

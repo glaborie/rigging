@@ -18,7 +18,7 @@ from rigging.manifest import load_manifest
 from rigging.protocols import Allow, Deny
 from rigging.registry import Registry
 from rigging.testing import FakeClient
-from rigging.types import ToolCall, ToolResult
+from rigging.types import RunContext, ToolCall, ToolResult
 
 
 def _spec(tmp_path, **extra):
@@ -70,7 +70,7 @@ class _RaisingTool:
         "name": "raises", "description": "raises",
         "parameters": {"type": "object", "properties": {}}}}
 
-    def run(self, call: ToolCall) -> ToolResult:
+    def run(self, call: ToolCall, ctx: RunContext | None = None) -> ToolResult:
         raise ValueError("third-party tool exploded")
 
 

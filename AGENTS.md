@@ -56,7 +56,8 @@ exit-criteria demos verified live.
 
 ```
 rigging/
-  types.py          canonical Message/ToolCall/Usage/ModelResponse (+ reasoning)
+  types.py          canonical Message/ToolCall/Usage/ModelResponse (+ reasoning),
+                    RunContext for loop-supplied tool scope (ADR-0024)
   protocols.py      every swappable interface; imports only types
   registry.py       decorators + entry-point discovery; resolve_all fails fast
   loop.py           the agent loop; invariants 2-4 live here

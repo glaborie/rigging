@@ -42,7 +42,7 @@ that claim seriously: the loop knows about protocols, never about vendors.
 | Protocol | Shape | Implementations | Milestone |
 |---|---|---|---|
 | `LLMClient` | `stream(request) -> Iterator[ModelDelta]`, `complete(request) -> ModelResponse` | `OpenAICompatClient` (httpx) | v0.1 |
-| `Tool` | `name`, `description`, `json_schema`, `side_effecting`, `run(args) -> ToolResult` | decorator-registered functions | v0.1 |
+| `Tool` | `name`, `description`, `json_schema`, `side_effecting`, `run(call, ctx) -> ToolResult` | decorator-registered functions | v0.1 |
 | `SkillResolver` | `discover() -> list[SkillMeta]`, `load(name) -> Skill` | filesystem + packages | v0.2 |
 | `Guardrail` | `on_input`, `on_tool_call`, `on_tool_result`, `on_output` → `Allow \| Deny \| Transform` | 4 built-ins | v0.3 |
 | `ApprovalPolicy` | `request(call, tool, reason) -> (approved, note)` | CLI prompt, scripted (tests), web page (`--manifest`, ADR-0023) | v0.3 / v0.7 |
@@ -72,7 +72,8 @@ for step in range(limits.max_steps):
         verdict = on_tool_call(chain, call)     may deny | transform args
         if call.side_effecting:
             approval = policy.request(call)     deny → tool message "denied by policy"
-        result = tool.run(args)                 any exception → tool message, never a crash
+        result = tool.run(call, ctx)            ctx = session_id + run_id (ADR-0024);
+                                                any exception → tool message, never a crash
         result = on_tool_result(chain, result)  untrusted content inspected here
         messages += tool message
 # budget exhausted
@@ -206,6 +207,12 @@ def register_tools(reg: Registry) -> None:
 Entry-points are discovered automatically during `assemble()` and logged to stderr.
 To disable discovery, pass an explicit `Registry()` with `registry=registry` to
 `assemble()` or `run_agent()`.
+
+The `Tool` protocol takes the loop's `RunContext` as a second argument:
+`run(call, ctx)`. A decorated function that needs the session declares
+`ctx: RunContext` and `FunctionTool` injects it; the parameter is never in the
+JSON schema, so the model cannot see or set it (ADR-0024). Tools that do not
+need conversation state ignore it.
 ## 8. The web view (v0.5 read-only, v0.7 chat; ADR-0018, ADR-0023)
 
 `rigging/service/` is a projection, not a layer: every read is a query over

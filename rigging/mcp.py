@@ -19,7 +19,7 @@ from typing import Any
 
 from rigging.errors import CapabilityNotFound, RiggingError
 from rigging.manifest import McpServerCfg
-from rigging.types import ToolCall, ToolResult
+from rigging.types import RunContext, ToolCall, ToolResult
 
 SessionFactory = Callable[[], Any]
 """Returns an async context manager yielding an initialised MCP session."""
@@ -52,7 +52,9 @@ class McpTool:
         # declares effect-ness, approval policy decides via the manifest.
         self.side_effecting = False
 
-    def run(self, call: ToolCall) -> ToolResult:
+    def run(self, call: ToolCall, ctx: RunContext | None = None) -> ToolResult:
+        # MCP tools have no session-scoped state of their own; the far side owns
+        # anything persistent (ADR-0024).
         try:
             content = self._source.call(self._bare, call.arguments)
         except Exception as exc:  # any MCP failure is a tool message, never a crash

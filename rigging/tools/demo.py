@@ -13,12 +13,12 @@ import datetime as _dt
 import json
 import os
 import sqlite3
-import uuid
 from contextlib import closing
 from pathlib import Path
 from typing import Any
 
 from rigging.registry import DEFAULT_REGISTRY, tool
+from rigging.types import RunContext
 
 
 def _db() -> sqlite3.Connection:
@@ -48,26 +48,44 @@ def _tier(list_price: float, qty: int) -> float:
 
 
 BASKET_SCHEMA = """
-CREATE TABLE IF NOT EXISTS baskets (
-  basket_id  TEXT PRIMARY KEY,
+CREATE TABLE IF NOT EXISTS session_baskets (
+  session_id TEXT PRIMARY KEY,
   created_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS basket_items (
-  basket_id TEXT NOT NULL,
-  sku       TEXT NOT NULL,
-  qty       INTEGER NOT NULL,
-  added_at  TEXT NOT NULL,
-  PRIMARY KEY (basket_id, sku)
+CREATE TABLE IF NOT EXISTS session_basket_items (
+  session_id TEXT NOT NULL,
+  sku        TEXT NOT NULL,
+  qty        INTEGER NOT NULL,
+  added_at   TEXT NOT NULL,
+  PRIMARY KEY (session_id, sku)
 );
 """
 
 
 def _basket_db() -> sqlite3.Connection:
-    """The demo DB plus the basket tables. Old seeded databases gain them here."""
+    """The demo DB plus the session-basket tables, created lazily in old databases.
+
+    Baskets used to be keyed by a generated id the model had to thread through
+    every call; they are now one per session (ADR-0024). A pre-existing
+    `baskets` table is renamed, not dropped: those rows are scratch state, but
+    there is no reason to destroy someone's half-built basket to make room.
+    """
     db = _db()
+    tables = {row["name"] for row in db.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "baskets" in tables and "session_baskets" not in tables:
+        db.execute("ALTER TABLE baskets RENAME TO baskets_legacy")
+    if "basket_items" in tables and "session_basket_items" not in tables:
+        db.execute("ALTER TABLE basket_items RENAME TO basket_items_legacy")
     db.executescript(BASKET_SCHEMA)
     db.commit()
     return db
+
+
+def _session(ctx: RunContext | None) -> str:
+    if ctx is None:
+        raise RuntimeError("basket tools need a run context: the loop supplies the session id")
+    return ctx.session_id
 
 
 def _ensure_multiline_orders(db: sqlite3.Connection) -> None:
@@ -112,78 +130,84 @@ def _line(db: sqlite3.Connection, sku: str, qty: int) -> dict[str, Any]:
     }
 
 
-def _view(db: sqlite3.Connection, basket_id: str) -> dict[str, Any]:
+def _view(db: sqlite3.Connection, session_id: str) -> dict[str, Any]:
     rows = db.execute(
-        "SELECT sku, qty FROM basket_items WHERE basket_id = ? ORDER BY sku", (basket_id,)
+        "SELECT sku, qty FROM session_basket_items WHERE session_id = ? ORDER BY sku",
+        (session_id,),
     ).fetchall()
     items = [_line(db, row["sku"], row["qty"]) for row in rows]
     return {
-        "basket_id": basket_id, "items": items, "count": len(items),
+        "basket": session_id, "items": items, "count": len(items),
         "subtotal": _money(sum(float(item.get("line_total", 0.0)) for item in items)),
     }
 
 
 @tool()
-def add_to_basket(sku: str, qty: int, basket_id: str = "") -> str:
-    """Add qty of a SKU to a basket. Omit basket_id to start one; reuse the id it returns."""
+def add_to_basket(sku: str, qty: int, ctx: RunContext) -> str:
+    """Add qty of a SKU to this session's basket. The basket is per session; no id needed."""
     if qty <= 0:
         return f"error: qty must be positive (got {qty})"
+    session_id = _session(ctx)
     with closing(_basket_db()) as db:
         if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone() is None:
             return f"error: unknown SKU {sku!r}"
-        basket_id = basket_id.strip() or f"b_{uuid.uuid4().hex[:8]}"
-        db.execute("INSERT OR IGNORE INTO baskets(basket_id, created_at) VALUES (?,?)",
-                   (basket_id, _now()))
+        db.execute("INSERT OR IGNORE INTO session_baskets(session_id, created_at) VALUES (?,?)",
+                   (session_id, _now()))
         db.execute(
-            "INSERT INTO basket_items(basket_id, sku, qty, added_at) VALUES (?,?,?,?)"
-            " ON CONFLICT(basket_id, sku) DO UPDATE SET qty = qty + excluded.qty",
-            (basket_id, sku, qty, _now()),
+            "INSERT INTO session_basket_items(session_id, sku, qty, added_at) VALUES (?,?,?,?)"
+            " ON CONFLICT(session_id, sku) DO UPDATE SET qty = qty + excluded.qty",
+            (session_id, sku, qty, _now()),
         )
         db.commit()
-        total = db.execute("SELECT qty FROM basket_items WHERE basket_id = ? AND sku = ?",
-                           (basket_id, sku)).fetchone()["qty"]
-        return json.dumps({"added": _line(db, sku, total), **_view(db, basket_id)}, indent=1)
+        total = db.execute(
+            "SELECT qty FROM session_basket_items WHERE session_id = ? AND sku = ?",
+            (session_id, sku)).fetchone()["qty"]
+        return json.dumps({"added": _line(db, sku, total), **_view(db, session_id)}, indent=1)
 
 
 @tool()
-def view_basket(basket_id: str) -> str:
-    """Show a basket's lines with tier unit prices, MOQ/stock flags and the subtotal."""
+def view_basket(ctx: RunContext) -> str:
+    """Show this session's basket: lines, tier unit prices, MOQ/stock flags and the subtotal."""
     with closing(_basket_db()) as db:
-        return json.dumps(_view(db, basket_id.strip()), indent=1)
+        return json.dumps(_view(db, _session(ctx)), indent=1)
 
 
 @tool()
-def update_basket_item(basket_id: str, sku: str, qty: int) -> str:
-    """Set a basket line to qty; qty=0 removes the line. Use add_to_basket for new lines."""
+def update_basket_item(sku: str, qty: int, ctx: RunContext) -> str:
+    """Set a line in this session's basket to qty; qty=0 removes it. Use add_to_basket for new lines."""
     if qty < 0:
         return f"error: qty must be zero or positive (got {qty})"
+    session_id = _session(ctx)
     with closing(_basket_db()) as db:
         if qty == 0:
-            removed = db.execute("DELETE FROM basket_items WHERE basket_id = ? AND sku = ?",
-                                 (basket_id, sku)).rowcount
+            removed = db.execute(
+                "DELETE FROM session_basket_items WHERE session_id = ? AND sku = ?",
+                (session_id, sku)).rowcount
             db.commit()
             if not removed:
-                return f"error: {sku!r} is not in basket {basket_id!r}"
-            return json.dumps({"removed": sku, **_view(db, basket_id)}, indent=1)
+                return f"error: {sku!r} is not in this session's basket"
+            return json.dumps({"removed": sku, **_view(db, session_id)}, indent=1)
         if db.execute("SELECT 1 FROM products WHERE sku = ?", (sku,)).fetchone() is None:
             return f"error: unknown SKU {sku!r}"
-        updated = db.execute("UPDATE basket_items SET qty = ? WHERE basket_id = ? AND sku = ?",
-                             (qty, basket_id, sku)).rowcount
+        updated = db.execute(
+            "UPDATE session_basket_items SET qty = ? WHERE session_id = ? AND sku = ?",
+            (qty, session_id, sku)).rowcount
         db.commit()
         if not updated:
-            return (f"error: {sku!r} is not in basket {basket_id!r}; "
+            return (f"error: {sku!r} is not in this session's basket; "
                     "use add_to_basket for a new line")
-        return json.dumps({"updated": _line(db, sku, qty), **_view(db, basket_id)}, indent=1)
+        return json.dumps({"updated": _line(db, sku, qty), **_view(db, session_id)}, indent=1)
 
 
 @tool()
-def clear_basket(basket_id: str) -> str:
-    """Remove every line from a basket. The basket id stays valid for a new build."""
+def clear_basket(ctx: RunContext) -> str:
+    """Remove every line from this session's basket."""
+    session_id = _session(ctx)
     with closing(_basket_db()) as db:
-        removed = db.execute("DELETE FROM basket_items WHERE basket_id = ?",
-                             (basket_id.strip(),)).rowcount
+        removed = db.execute(
+            "DELETE FROM session_basket_items WHERE session_id = ?", (session_id,)).rowcount
         db.commit()
-        return json.dumps({"removed": removed, **_view(db, basket_id.strip())}, indent=1)
+        return json.dumps({"removed": removed, **_view(db, session_id)}, indent=1)
 
 
 def _next_order_id(db: sqlite3.Connection) -> str:
@@ -196,15 +220,15 @@ def _next_order_id(db: sqlite3.Connection) -> str:
 
 
 @tool(side_effecting=True)
-def submit_basket(basket_id: str) -> str:
-    """Convert a basket into an order. Requires approval. Every line must meet its
-    MOQ and fit stock; the order is recorded as `processing`, unpaid and unshipped."""
-    basket_id = basket_id.strip()
+def submit_basket(ctx: RunContext) -> str:
+    """Convert this session's basket into an order. Requires approval. Every line must
+    meet its MOQ and fit stock; the order is recorded as `processing`, unpaid and unshipped."""
+    session_id = _session(ctx)
     with closing(_basket_db()) as db:
         _ensure_multiline_orders(db)
-        basket = _view(db, basket_id)
+        basket = _view(db, session_id)
         if not basket["items"]:
-            return f"error: basket {basket_id!r} is empty — add lines with add_to_basket"
+            return "error: this session's basket is empty — add lines with add_to_basket"
         missing = [item["sku"] for item in basket["items"] if item.get("missing")]
         if missing:
             return (f"error: {', '.join(missing)} is no longer in the catalogue — "
@@ -227,11 +251,11 @@ def submit_basket(basket_id: str) -> str:
                 "INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note)"
                 " VALUES (?,?,?,?,?,?,?)",
                 [(order_id, item["sku"], item["qty"], item["unit_price"],
-                  "processing", None, f"from basket {basket_id}")
+                  "processing", None, f"from basket {session_id}")
                  for item in basket["items"]],
             )
-            db.execute("DELETE FROM basket_items WHERE basket_id = ?", (basket_id,))
-            db.execute("DELETE FROM baskets WHERE basket_id = ?", (basket_id,))
+            db.execute("DELETE FROM session_basket_items WHERE session_id = ?", (session_id,))
+            db.execute("DELETE FROM session_baskets WHERE session_id = ?", (session_id,))
             db.commit()
         except sqlite3.Error as exc:
             db.rollback()
@@ -239,7 +263,7 @@ def submit_basket(basket_id: str) -> str:
 
         return json.dumps({
             "order_id": order_id, "status": "processing", "currency": "USD",
-            "basket_id": basket_id, "lines": basket["items"], "total": basket["subtotal"],
+            "basket": session_id, "lines": basket["items"], "total": basket["subtotal"],
             "lead_days": max(item["lead_days"] for item in basket["items"]),
             "note": "Order recorded. No payment was taken and nothing has shipped.",
         }, indent=1)

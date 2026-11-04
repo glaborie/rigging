@@ -12,6 +12,9 @@ import rigging.tools.demo  # noqa: F401  (registration side-effect)
 from rigging.registry import DEFAULT_REGISTRY
 from rigging.testing import FakeClient
 from rigging.tools.schema import FunctionTool
+from rigging.types import RunContext
+
+SESSION = "s_test"
 
 
 @pytest.fixture()
@@ -26,9 +29,10 @@ def demo_db(tmp_path, monkeypatch):
     return out
 
 
-def _call(name: str, args: dict) -> str:
+def _call(name: str, args: dict, *, session: str = SESSION) -> str:
     ft = FunctionTool(DEFAULT_REGISTRY.get("tool", name))
-    return ft.run(type("C", (), {"id": "1", "name": name, "arguments": args})()).content  # type: ignore[arg-type]
+    call = type("C", (), {"id": "1", "name": name, "arguments": args})()
+    return ft.run(call, RunContext(session_id=session, run_id="r_test")).content  # type: ignore[arg-type]
 
 
 def test_seed_is_deterministic_and_chunked(tmp_path):
@@ -42,7 +46,7 @@ def test_seed_is_deterministic_and_chunked(tmp_path):
     db = sqlite3.connect(tmp_path / "a.db")
     assert db.execute("SELECT count(*) FROM orders WHERE status='delivered'").fetchone()[0] >= 3
     tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"baskets", "basket_items"} <= tables
+    assert {"session_baskets", "session_basket_items"} <= tables
 
 
 def test_lookup_and_pricing(demo_db):
@@ -77,102 +81,183 @@ def test_search_catalogue_by_name_and_sku(demo_db):
 
 def test_basket_lifecycle(demo_db):
     first = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 4}))
-    basket = first["basket_id"]
-    assert basket.startswith("b_")
+    assert first["basket"] == SESSION
     assert first["count"] == 1
     assert first["added"]["unit_price"] == 129.0
     assert first["subtotal"] == 516.0
 
-    second = json.loads(_call("add_to_basket",
-                              {"sku": "SW-24P-GBE", "qty": 2, "basket_id": basket}))
+    second = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 2}))
     assert second["count"] == 2
 
     # Adding again increments, and the tier is priced at the new line quantity.
-    again = json.loads(_call("add_to_basket",
-                             {"sku": "SFP-10G-LR", "qty": 6, "basket_id": basket}))
+    again = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 6}))
     line = next(i for i in again["items"] if i["sku"] == "SFP-10G-LR")
     assert line["qty"] == 10 and line["unit_price"] == 122.55
 
-    updated = json.loads(_call("update_basket_item",
-                               {"basket_id": basket, "sku": "SFP-10G-LR", "qty": 4}))
+    updated = json.loads(_call("update_basket_item", {"sku": "SFP-10G-LR", "qty": 4}))
     line = next(i for i in updated["items"] if i["sku"] == "SFP-10G-LR")
     assert line["qty"] == 4 and line["unit_price"] == 129.0
 
-    removed = json.loads(_call("update_basket_item",
-                               {"basket_id": basket, "sku": "SW-24P-GBE", "qty": 0}))
+    removed = json.loads(_call("update_basket_item", {"sku": "SW-24P-GBE", "qty": 0}))
     assert removed["count"] == 1
     assert [i["sku"] for i in removed["items"]] == ["SFP-10G-LR"]
 
-    view = json.loads(_call("view_basket", {"basket_id": basket}))
+    view = json.loads(_call("view_basket", {}))
     assert view["subtotal"] == 516.0
 
-    cleared = json.loads(_call("clear_basket", {"basket_id": basket}))
+    cleared = json.loads(_call("clear_basket", {}))
     assert cleared["count"] == 0 and cleared["subtotal"] == 0
 
 
+def test_baskets_are_per_session(demo_db):
+    """The loop's session id keys the basket; no id travels through the model."""
+    _call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 10}, session="s_one")
+    _call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 2}, session="s_two")
+
+    one = json.loads(_call("view_basket", {}, session="s_one"))
+    two = json.loads(_call("view_basket", {}, session="s_two"))
+    assert [i["sku"] for i in one["items"]] == ["SW-8P-GBE"]
+    assert [i["sku"] for i in two["items"]] == ["SW-24P-GBE"]
+
+    assert json.loads(_call("clear_basket", {}, session="s_one"))["count"] == 0
+    assert json.loads(_call("view_basket", {}, session="s_two"))["count"] == 1
+
+
+def test_basket_tools_need_a_run_context(demo_db):
+    """Called outside a run there is no session, and the failure is a tool message."""
+    ft = FunctionTool(DEFAULT_REGISTRY.get("tool", "view_basket"))
+    call = type("C", (), {"id": "1", "name": "view_basket", "arguments": {}})()
+    result = ft.run(call)  # type: ignore[arg-type]
+    assert result.is_error and "run context" in result.content
+
+
 def test_basket_flags_policy_and_validates(demo_db):
-    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 2}))
+    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 2},
+                             session="s_below"))
     assert below["added"]["below_moq"] is True
 
-    over = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 100}))
+    over = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 100},
+                            session="s_over"))
     assert over["added"]["exceeds_stock"] is True
-    assert below["basket_id"] != over["basket_id"]  # empty basket_id starts a new basket
 
     assert _call("add_to_basket", {"sku": "NOPE", "qty": 1}).startswith("error: unknown SKU")
     assert _call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 0}).startswith("error:")
-    assert _call("update_basket_item",
-                 {"basket_id": below["basket_id"], "sku": "SW-24P-GBE",
-                  "qty": 1}).startswith("error:")
-    assert _call("update_basket_item",
-                 {"basket_id": below["basket_id"], "sku": "SFP-10G-LR",
-                  "qty": -1}).startswith("error:")
+    assert _call("update_basket_item", {"sku": "SW-24P-GBE", "qty": 1},
+                 session="s_below").startswith("error:")
+    assert _call("update_basket_item", {"sku": "SFP-10G-LR", "qty": -1},
+                 session="s_below").startswith("error:")
 
 
 def test_basket_tables_are_created_on_an_old_seed(demo_db):
-    """Existing demo.db files predate the basket tables; the tool creates them."""
+    """Existing demo.db files predate the session baskets; the tool creates them."""
     db = sqlite3.connect(demo_db)
-    db.execute("DROP TABLE basket_items")
-    db.execute("DROP TABLE baskets")
+    db.execute("DROP TABLE session_basket_items")
+    db.execute("DROP TABLE session_baskets")
     db.commit()
     db.close()
     out = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2}))
     assert out["count"] == 1
 
 
+def test_legacy_baskets_are_renamed_not_dropped(demo_db):
+    """The pre-ADR-0024 table was keyed by basket_id; its rows stay inspectable."""
+    db = sqlite3.connect(demo_db)
+    db.executescript("""
+    DROP TABLE session_basket_items;
+    DROP TABLE session_baskets;
+    CREATE TABLE baskets(basket_id TEXT PRIMARY KEY, created_at TEXT NOT NULL);
+    CREATE TABLE basket_items(basket_id TEXT NOT NULL, sku TEXT NOT NULL,
+                              qty INTEGER NOT NULL, added_at TEXT NOT NULL,
+                              PRIMARY KEY (basket_id, sku));
+    INSERT INTO baskets VALUES ('b_legacy', '2026-11-04T00:00:00+00:00');
+    INSERT INTO basket_items VALUES ('b_legacy', 'SW-8P-GBE', 4, '2026-11-04T00:00:00+00:00');
+    """)
+    db.commit()
+    db.close()
+
+    out = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 1}))
+    assert out["count"] == 1, "the legacy basket is not the session's basket"
+    db = sqlite3.connect(demo_db)
+    tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"baskets_legacy", "basket_items_legacy"} <= tables
+    assert db.execute("SELECT qty FROM basket_items_legacy").fetchone()[0] == 4
+
+
 def test_submit_basket_creates_a_multiline_order(demo_db):
     first = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 10}))
-    basket_id = first["basket_id"]
-    added = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 10,
-                                               "basket_id": basket_id}))
+    assert first["count"] == 1
+    added = json.loads(_call("add_to_basket", {"sku": "SW-24P-GBE", "qty": 10}))
+    assert added["count"] == 2
 
-    out = json.loads(_call("submit_basket", {"basket_id": basket_id}))
+    out = json.loads(_call("submit_basket", {}))
     assert out["order_id"].startswith("ORD-")
     assert out["status"] == "processing"
     assert out["total"] == added["subtotal"] == 3591.0
     assert out["lead_days"] == 15, "a mixed basket quotes the slowest item"
-    assert out["basket_id"] == basket_id
+    assert out["basket"] == SESSION
 
     lines = json.loads(_call("lookup_order", {"order_id": out["order_id"]}))
     assert {line["sku"] for line in lines} == {"SW-8P-GBE", "SW-24P-GBE"}
     assert all(line["status"] == "processing" for line in lines)
-    assert {line["note"] for line in lines} == {f"from basket {basket_id}"}
+    assert {line["note"] for line in lines} == {f"from basket {SESSION}"}
 
     # the basket is consumed, and submitting it again is an error, not a second order
-    assert json.loads(_call("view_basket", {"basket_id": basket_id}))["count"] == 0
-    assert _call("submit_basket", {"basket_id": basket_id}).startswith("error:")
+    assert json.loads(_call("view_basket", {}))["count"] == 0
+    assert _call("submit_basket", {}).startswith("error:")
+
+
+def test_parallel_adds_share_the_session_basket(tmp_path, demo_db):
+    """Two `add_to_basket` calls in one model response: one basket, two lines (ADR-0024)."""
+    import yaml
+
+    from rigging.events import EventLog
+    from rigging.loop import run_agent
+    from rigging.manifest import load_manifest
+
+    d = tmp_path / "b2b.yaml"
+    d.write_text(yaml.safe_dump({
+        "name": "b2b", "model": "test", "system_prompt": "be terse",
+        "tools": ["add_to_basket", "view_basket"],
+        "parallel_tools": True,
+        "limits": {"max_steps": 3},
+    }))
+    client = FakeClient([
+        {"role": "assistant", "content": "",
+         "tool_calls": [
+             {"id": "1", "name": "add_to_basket",
+              "arguments": {"sku": "SW-8P-GBE", "qty": 10}},
+             {"id": "2", "name": "add_to_basket",
+              "arguments": {"sku": "SW-24P-GBE", "qty": 2}},
+         ]},
+        {"role": "assistant", "content": "Both lines are in the basket."},
+    ])
+    with EventLog(tmp_path / "e.db") as log:
+        result = run_agent(load_manifest(str(d)), "add both", client=client, log=log)
+        session_id = log.runs()[0]["session_id"]
+
+    assert result.status == "ok"
+    view = json.loads(_call("view_basket", {}, session=session_id))
+    assert {item["sku"] for item in view["items"]} == {"SW-8P-GBE", "SW-24P-GBE"}
+    db = sqlite3.connect(demo_db)
+    assert db.execute("SELECT count(*) FROM session_baskets WHERE session_id = ?",
+                      (session_id,)).fetchone()[0] == 1
 
 
 def test_submit_basket_refuses_moq_and_stock_violations(demo_db):
-    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 1}))
-    out = _call("submit_basket", {"basket_id": below["basket_id"]})
+    below = json.loads(_call("add_to_basket", {"sku": "SFP-10G-LR", "qty": 1},
+                             session="s_below"))
+    assert below["count"] == 1
+    out = _call("submit_basket", {}, session="s_below")
     assert out.startswith("error:") and "MOQ" in out
 
-    over = json.loads(_call("add_to_basket", {"sku": "KVM-IP-16", "qty": 19}))
-    out = _call("submit_basket", {"basket_id": over["basket_id"]})
+    over = json.loads(_call("add_to_basket", {"sku": "KVM-IP-16", "qty": 19},
+                            session="s_over"))
+    assert over["count"] == 1
+    out = _call("submit_basket", {}, session="s_over")
     assert out.startswith("error:") and "exceeds stock" in out
 
     # a refused submit leaves the basket alone, ready for update_basket_item
-    assert json.loads(_call("view_basket", {"basket_id": below["basket_id"]}))["count"] == 1
+    assert json.loads(_call("view_basket", {}, session="s_below"))["count"] == 1
 
 
 def test_submit_basket_is_side_effecting(demo_db):
@@ -195,7 +280,8 @@ def test_submit_basket_upgrades_a_single_line_orders_table(demo_db):
     db.close()
 
     basket = json.loads(_call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2}))
-    out = json.loads(_call("submit_basket", {"basket_id": basket["basket_id"]}))
+    assert basket["count"] == 1
+    out = json.loads(_call("submit_basket", {}))
     assert out["order_id"] == "ORD-1013"
     assert "ORD-1001" in _call("lookup_order", {"order_id": "ORD-1001"})
     assert len(json.loads(_call("lookup_order", {"order_id": out["order_id"]}))) == 1

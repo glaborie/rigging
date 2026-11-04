@@ -17,8 +17,8 @@ if they named a product but not a SKU, then resolve in this order:
 4. **Approval** — every order needs an operator's approval: `submit_basket` is
    consequential and prompts for one. Say so explicitly and do not imply you can
    approve it yourself.
-5. **Basket** — `add_to_basket` records a line and returns a `basket_id`;
-   `view_basket` returns tier unit prices, MOQ/stock flags and the subtotal.
+5. **Basket** — each session has one basket. `add_to_basket(sku, qty)` records a
+   line; `view_basket` returns tier unit prices, MOQ/stock flags and the subtotal.
    The customer confirms the subtotal, then `submit_basket` converts the basket
    into an order (`processing`, unpaid, unshipped). Until it returns, never
    imply the basket was placed.
