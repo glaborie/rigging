@@ -308,7 +308,7 @@ def _validate(raw: dict[str, Any]) -> None:
         probe.write_text(yaml.safe_dump(clean, sort_keys=False), encoding="utf-8")
         try:
             load_manifest(probe)
-        except ManifestError as exc:  # pragma: no cover - the wizard builds valid dicts
+        except (ManifestError, ValueError) as exc:  # pydantic's ValidationError is a ValueError
             raise InitError(f"the answers did not make a valid manifest: {exc}") from exc
 
 

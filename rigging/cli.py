@@ -2,7 +2,7 @@
 
 v0.1: run, schema, tools. Later milestones add: chat (v0.2), index (v0.3), eval (v0.4),
 serve (v0.5), runs. `init` is the manifest wizard: an interview, never a template dump.
-Anything not yet built says so and exits 2 — it never pretends.
+Every command here is implemented; nothing prints a promise it cannot keep.
 """
 
 from __future__ import annotations
@@ -20,7 +20,19 @@ from rigging.events import EventLog
 from rigging.manifest import AgentSpec, load_manifest
 from rigging.registry import DEFAULT_REGISTRY
 
-NOT_YET: dict[str, str] = {}
+
+def _delta_printer(show_reasoning: bool) -> Any:
+    """Stream answer text to stdout and reasoning to stderr, flushing both."""
+
+    def emit(delta: Any) -> None:
+        if delta.text:
+            sys.stdout.write(delta.text)
+            sys.stdout.flush()
+        if show_reasoning and delta.reasoning:
+            sys.stderr.write(f"\033[2m{delta.reasoning}\033[0m")
+            sys.stderr.flush()
+
+    return emit
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,10 +52,6 @@ def _parser() -> argparse.ArgumentParser:
     run.add_argument("--replay", metavar="JSONL", default=None,
                      help="replay a recorded transcript instead of calling the API (offline)")
     run.add_argument("--json", action="store_true", help="print the RunResult as JSON")
-
-    for name, version in NOT_YET.items():
-        sp = sub.add_parser(name, help=f"(lands in {version})")
-        sp.add_argument("args", nargs="*")
 
     runs = sub.add_parser("runs", help="list runs and inspect their event trail")
     runs.add_argument("--db", default=None, help="SQLite path (default: $RIGGING_DB_PATH)")
@@ -119,16 +127,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.model:
         spec = spec.model_copy(update={"model": args.model})
 
-    def emit(delta: Any) -> None:
-        if delta.text:
-            sys.stdout.write(delta.text)
-            sys.stdout.flush()
-        if args.show_reasoning and delta.reasoning:
-            sys.stderr.write(f"\033[2m{delta.reasoning}\033[0m")
-            sys.stderr.flush()
-
-    log = EventLog(args.db or settings.db_path)
-    stream = None if args.json else emit  # --json means machine-readable stdout
+    stream = None if args.json else _delta_printer(args.show_reasoning)
     client = None
     if args.replay:
         from rigging.replay import ReplayClient
@@ -138,10 +137,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         # recording through the SSE reassembler would be theatre (and ReplayClient
         # has no .stream())
         stream = None
-    result = run_agent(spec, args.prompt, log=log, session_id=args.session,
-                       stream=stream,
-                       client=client,
-                       approval=ScriptedApproval(True) if args.yes or args.replay else None)
+    with EventLog(args.db or settings.db_path) as log:
+        result = run_agent(spec, args.prompt, log=log, session_id=args.session,
+                           stream=stream,
+                           client=client,
+                           approval=ScriptedApproval(True) if args.yes or args.replay else None)
 
     if not args.json:
         print()
@@ -212,32 +212,24 @@ def cmd_chat(args: argparse.Namespace) -> int:
         spec = spec.model_copy(update={"model": args.model})
     if args.profile:
         spec = spec.model_copy(update={"credential_profile": args.profile})
-    log = EventLog(args.db or settings.db_path)
-
-    def emit(delta: Any) -> None:
-        if delta.text:
-            sys.stdout.write(delta.text)
-            sys.stdout.flush()
-        if args.show_reasoning and delta.reasoning:
-            sys.stderr.write(f"\033[2m{delta.reasoning}\033[0m")
-
-    return chat(spec, log=log, session_id=args.session, stream=emit)
+    with EventLog(args.db or settings.db_path) as log:
+        return chat(spec, log=log, session_id=args.session,
+                    stream=_delta_printer(args.show_reasoning))
 
 
 def cmd_runs(args: argparse.Namespace) -> int:
-    import json
-
-    log = EventLog(args.db or settings.db_path)
-    if args.run:
-        found = False
-        for ev in log.events(args.run):
-            found = True
-            print(f"{ev['seq']:>3}  {ev['type']:<20} {json.dumps(ev['payload'], default=str)[:160]}")
-        if not found:
-            print(f"no events for run {args.run}", file=sys.stderr)
-            return 1
-        return 0
-    rows = log.runs(limit=args.limit)
+    with EventLog(args.db or settings.db_path) as log:
+        if args.run:
+            found = False
+            for ev in log.events(args.run):
+                found = True
+                print(f"{ev['seq']:>3}  {ev['type']:<20} "
+                      f"{json.dumps(ev['payload'], default=str)[:160]}")
+            if not found:
+                print(f"no events for run {args.run}", file=sys.stderr)
+                return 1
+            return 0
+        rows = log.runs(limit=args.limit)
     if not rows:
         print("no runs yet", file=sys.stderr)
         return 1
@@ -381,14 +373,23 @@ def cmd_tools(args: argparse.Namespace) -> int:
     return 0
 
 
+HANDLERS = {
+    "run": cmd_run,
+    "init": cmd_init,
+    "schema": cmd_schema,
+    "tools": cmd_tools,
+    "runs": cmd_runs,
+    "chat": cmd_chat,
+    "index": cmd_index,
+    "eval": cmd_eval,
+    "calibrate": cmd_calibrate,
+    "serve": cmd_serve,
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if args.command in NOT_YET:
-        print(f"`harness {args.command}` lands in {NOT_YET[args.command]}. "
-              f"See docs/milestones.md.", file=sys.stderr)
-        return 2
-    handler = {"run": cmd_run, "schema": cmd_schema, "tools": cmd_tools, "runs": cmd_runs, "chat": cmd_chat, "index": cmd_index, "eval": cmd_eval, "calibrate": cmd_calibrate, "serve": cmd_serve, "init": cmd_init}[args.command]
-    return handler(args)
+    return HANDLERS[args.command](args)
 
 
 if __name__ == "__main__":
