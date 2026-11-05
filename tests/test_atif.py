@@ -247,3 +247,70 @@ def test_text_and_tool_calls_in_one_generation() -> None:
     assert steps[1]["message"] == "Let me check that order."
     assert steps[1]["tool_calls"][0]["function_name"] == "lookup_order"
     assert steps[2]["observation"]["results"][0]["source_call_id"] == steps[1]["tool_calls"][0]["tool_call_id"]
+
+
+class _Response:
+    def __init__(self, body: dict[str, object]) -> None:
+        self.status_code = 200
+        self._body = body
+
+    def json(self) -> dict[str, object]:
+        return self._body
+
+    def raise_for_status(self) -> None:
+        return None
+
+
+class _Client:
+    """The two parts of httpx.Client these helpers use."""
+
+    def __init__(self, pages: list[dict[str, object]]) -> None:
+        self.pages = pages
+        self.calls: list[tuple[str, dict[str, object]]] = []
+
+    def get(self, path: str, params: dict[str, object] | None = None) -> _Response:
+        self.calls.append((path, dict(params or {})))
+        return _Response(self.pages[len(self.calls) - 1])
+
+
+def test_session_traces_use_the_v2_observations_api() -> None:
+    """v4 removed GET /sessions/{id}; the session is a filter, grouped by traceId."""
+    mod = _mod()
+    rows = [
+        {"traceId": "tr_1", "traceName": "turn one", "tags": ["bench"], "projectId": "p"},
+        {"traceId": "tr_1", "traceName": "turn one", "tags": ["bench"], "projectId": "p"},
+        {"traceId": "tr_2", "traceName": "turn two", "tags": [], "projectId": "p"},
+    ]
+    client = _Client([{"data": rows, "meta": {}}])
+
+    traces = mod.session_traces(client, "s_test", since="2026-01-01T00:00:00Z")
+
+    path, params = client.calls[0]
+    assert path == "/api/public/v2/observations"
+    assert params["fields"] == "core,basic,trace_context"
+    assert params["fromStartTime"] == "2026-01-01T00:00:00Z"
+    assert "toStartTime" in params
+    assert json.loads(str(params["filter"])) == [
+        {"type": "string", "column": "sessionId", "operator": "=", "value": "s_test"}
+    ]
+    assert [t["id"] for t in traces] == ["tr_1", "tr_2"]
+    assert traces[0]["name"] == "turn one"
+    assert traces[0]["tags"] == ["bench"]
+
+
+def test_trace_observations_follow_the_cursor() -> None:
+    mod = _mod()
+    client = _Client([
+        {"data": [{"id": "a"}], "meta": {"cursor": "c1"}},
+        {"data": [{"id": "b"}], "meta": {}},
+    ])
+
+    rows = mod.trace_observations(client, "tr_1")
+
+    assert [r["id"] for r in rows] == ["a", "b"]
+    first, second = client.calls
+    assert first[1]["traceId"] == "tr_1"
+    assert first[1]["fields"] == mod.OBSERVATION_FIELDS
+    assert second[1]["cursor"] == "c1"
+    assert second[1]["fromStartTime"] == mod.DEFAULT_SINCE
+

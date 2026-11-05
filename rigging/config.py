@@ -77,9 +77,9 @@ class Settings(BaseSettings):
     subagent_max_depth: int = 1
 
     # observability
-    # Comma-separated labels sent as `langfuse.trace.tags` on the root span, so a
-    # run can be filtered in the UI. `scripts/bench.py` sets this per model and
-    # repeat; nothing else needs it.
+    # Comma-separated labels sent as `langfuse.trace.tags` on every span, so a
+    # run can be filtered in the UI (v4 filters observations, not traces).
+    # `scripts/bench.py` sets this per model and repeat; nothing else needs it.
     trace_tags: str = Field(default="", validation_alias="RIGGING_TRACE_TAGS")
     # The trace's name in Langfuse (`langfuse.trace.name`). Without it every run
     # shares the root span's name, so a scan of 33 probes is 33 rows called

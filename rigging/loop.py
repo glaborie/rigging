@@ -80,28 +80,24 @@ def _end_span(agent: Assembled, spans: Any, attributes: dict[str, Any]) -> None:
 
 
 def _content(spec: AgentSpec, *, input_value: Any = None,
-             output_value: Any = None, trace: bool = False) -> dict[str, Any]:
+             output_value: Any = None) -> dict[str, Any]:
     """Langfuse reads observation content from these JSON-string attributes.
 
-    `langfuse.observation.input` / `.output` are what fill the trace and
-    generation columns in the UI; the `gen_ai.*` attributes only carry model and
-    usage metadata. `trace=True` (root span only) also sets the legacy
-    `langfuse.trace.*` fields, which v3 reads and v4 keeps for evaluators.
-    Gated by the manifest's `capture_content`.
+    `langfuse.observation.input` / `.output` are what fill the observation
+    columns in the UI; the `gen_ai.*` attributes only carry model and usage
+    metadata. Langfuse v4 has no trace-level input/output: the overall request
+    and response belong on the root observation, which is exactly what these
+    attributes are. The legacy `langfuse.trace.input` / `.output` pair is
+    deliberately not written (ADR-0012, v4 amendment). Gated by the manifest's
+    `capture_content`.
     """
     if not spec.observability.capture_content:
         return {}
     attrs: dict[str, Any] = {}
     if input_value is not None:
-        value = json.dumps(input_value, default=str)
-        attrs["langfuse.observation.input"] = value
-        if trace:
-            attrs["langfuse.trace.input"] = value
+        attrs["langfuse.observation.input"] = json.dumps(input_value, default=str)
     if output_value is not None:
-        value = json.dumps(output_value, default=str)
-        attrs["langfuse.observation.output"] = value
-        if trace:
-            attrs["langfuse.trace.output"] = value
+        attrs["langfuse.observation.output"] = json.dumps(output_value, default=str)
     return attrs
 
 
@@ -441,7 +437,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
                 "gen_ai.usage.output_tokens": result.usage.output_tokens,
                 "rigging.cost_usd": result.cost_usd,
                 **_tool_attributes(used_tools),
-                **_content(agent.spec, output_value=result.output, trace=True),
+                **_content(agent.spec, output_value=result.output),
             })
             root["ended"] = True
         for exporter in agent.exporters:
@@ -493,6 +489,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     usage = Usage()
     started = time.perf_counter()
     root["span"] = root_span = _span(agent, "invoke_agent", {
+        "langfuse.observation.type": "agent",
         "gen_ai.operation.name": "invoke_agent",
         "gen_ai.system": agent.client.name if hasattr(agent.client, "name") else "openai",
         "gen_ai.request.model": spec.model,
@@ -503,7 +500,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
         **_trace_tags(),
         **_trace_name(),
-        **_content(spec, input_value=user_content, trace=True),
+        **_content(spec, input_value=user_content),
     })
     last: ModelResponse | None = None
     exhausted: str | None = None
@@ -516,6 +513,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             break
 
         call_span = _span(agent, "chat", {
+            "langfuse.observation.type": "generation",
             "gen_ai.operation.name": "chat",
             "gen_ai.request.model": spec.model,
             "gen_ai.request.max_tokens": spec.limits.max_tokens,
@@ -634,7 +632,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.handoff": bool(agent.handoff),
         "rigging.cost_usd": agent.prices.cost(spec.model, usage),
         **_tool_attributes(used_tools),
-        **_content(spec, output_value=output, trace=True),
+        **_content(spec, output_value=output),
     })
     root["ended"] = True
     _finish("ok", content_chars=len(output))
@@ -693,6 +691,7 @@ def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
     """Everything that must happen serially: event, span, guardrails, approval."""
     log.append(run_id, "tool_call", call.model_dump())
     tool_span = _span(agent, "execute_tool", {
+        "langfuse.observation.type": "tool",
         "gen_ai.operation.name": "execute_tool",
         "gen_ai.tool.name": call.name,
         "rigging.tool.side_effecting": bool(getattr(tools.get(call.name), "side_effecting", False)),

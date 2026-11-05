@@ -144,7 +144,13 @@ Spans follow OTel `gen_ai.*` conventions so any backend works:
 | `guardrail <name>` | `rigging.guardrail.hook`, `rigging.guardrail.verdict`, `rigging.guardrail.confidence` |
 
 Langfuse is the first OTLP target, MLflow the second. Both are `Exporter`
-implementations; neither is imported by the loop.
+implementations; neither is imported by the loop. The Langfuse exporter is
+v4-ready: spans go to `/api/public/otel/v1/traces` with
+`x-langfuse-ingestion-version: 4`; the root observation carries the overall
+input/output (`langfuse.observation.*`), and trace context (session, name, tags,
+user, release/version/environment and `langfuse.trace.metadata.*`) is repeated on
+every span because v4 filters observations rather than traces. Reads use
+`/api/public/v2/observations`, grouped by `traceId` when a trace is wanted.
 
 A manifest enables them with `observability: {exporters: [langfuse], capture_content: true}`.
 `harness run|chat|serve --export langfuse` (and `make demo|web|eval EXPORT=langfuse`)

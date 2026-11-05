@@ -188,9 +188,19 @@ first. Named credential profiles work the same way: `extra="allow"` keeps
 `RIGGING_PROFILE_<NAME>_BASE_URL/_API_KEY` from `.env` (real environment wins).
 The exporter resolves the host as
 `endpoint → env LANGFUSE_HOST → .env LANGFUSE_HOST → env LANGFUSE_BASE_URL → cloud
-default`; the OTLP path `/api/public/otel/v1/traces` is appended once. Exporters
-are closed on **every** exit path (ok, denied, budget_exhausted, output-deny) —
-a batch processor that is never flushed drops its spans.
+default`; the OTLP path `/api/public/otel/v1/traces` is appended once, and the
+`x-langfuse-ingestion-version: 4` header selects the observations-first pipeline.
+Exporters are closed on **every** exit path (ok, denied, budget_exhausted,
+output-deny) — a batch processor that is never flushed drops its spans.
+
+The span shape is v4-native: the overall request/response is on the root
+observation (`langfuse.observation.input/output`), and session, trace name, tags,
+user, release/version/environment and `langfuse.trace.metadata.*` are repeated on
+every span, because v4 filters observations rather than traces. The legacy
+`langfuse.trace.input/output` attributes are not written. Reads use
+`GET /api/public/v2/observations` with a bounded time window and cursor
+pagination; the deprecated `/api/public/traces` and `/api/public/sessions/{id}`
+endpoints are not used.
 
 Neither `make check` nor `make observability` emits a span: the tests are offline
 by rule and the credential check runs no agent. `make trace` is the one command

@@ -7,15 +7,20 @@ Three implementations, one protocol:
   * `MLflowExporter` — one rigging run per MLflow run over the tracking REST API
     (ADR-0020), so it needs no SDK and no extra.
 
-Langfuse specific gotchas, learned the hard way (they cost hours once):
-  * the OTLP path is `/api/public/otel/v1/traces` on self-hosted and
-    `/api/public/otel/v1/traces` on Cloud EU/US too — not `/v1/traces`;
+Langfuse v4 is observations-first: there is no trace-level input/output, and
+filters/aggregations read individual observations. The gotchas, learned the hard
+way (they cost hours once):
+  * the OTLP path is `/api/public/otel/v1/traces` on self-hosted and Cloud
+    EU/US too — not `/v1/traces`;
   * auth is HTTP Basic with `public_key:secret_key`, base64-encoded;
   * send `x-langfuse-ingestion-version: 4` or traces land in the legacy pipeline;
   * a span's gen_ai.* attributes are what produce model/usage columns in the UI;
-    `session.id` on the root span is what groups multi-turn conversations;
-  * input/output columns come from `langfuse.observation.input` / `.output`
-    (JSON strings), not from `gen_ai.*`; `capture_content: false` drops them.
+  * input/output live on the observation (`langfuse.observation.input` /
+    `.output`, JSON strings), including the overall request/response on the root;
+    the deprecated `langfuse.trace.input` / `.output` pair is not written;
+  * trace context that must filter child observations — session, trace name,
+    tags, user, release, version, environment and `langfuse.trace.metadata.*` —
+    is copied to every span; `capture_content: false` drops only content.
 """
 
 from __future__ import annotations
@@ -28,13 +33,22 @@ from typing import Any
 from rigging.config import settings
 from rigging.errors import ExporterConfigError
 
-# Attributes that describe the whole trace. Langfuse reads them per observation
-# when filtering or aggregating (session views, tool filters), so they cannot
-# live on the root span alone.
+# Attributes that describe the whole trace. Langfuse v4 queries observations
+# directly, so anything that must filter or aggregate a child observation has to
+# be on that span too — the root alone is not enough.
 _TRACE_SCOPE_KEYS = (
     "session.id",
+    "langfuse.session.id",
+    "langfuse.user.id",
+    "user.id",
+    "langfuse.trace.name",
     "langfuse.trace.tags",
+    "langfuse.trace.public",
+    "langfuse.version",
+    "langfuse.release",
+    "langfuse.environment",
 )
+_TRACE_SCOPE_PREFIXES = ("langfuse.trace.metadata.",)
 
 
 class ConsoleExporter:
@@ -112,13 +126,13 @@ class LangfuseExporter:
 
         tracer = self._tracer_obj()
         attrs = self._attributes(attributes)
-        # Langfuse aggregates and filters per observation, not only per trace:
-        # `session.id` on the root alone leaves child rows out of session views
-        # and out of session-level filters (calledToolNames among them). Capture
-        # the trace-scope attributes from the root and put them on every span.
-        for key in _TRACE_SCOPE_KEYS:
-            if key in attrs and key not in self._trace_scope:
-                self._trace_scope[key] = attrs[key]
+        # Capture the trace-scope attributes from the root (or whichever span
+        # learns them first) and repeat them on every later span. This includes
+        # `langfuse.trace.metadata.*`, which is how v4 metadata stays filterable
+        # on child observations rather than only on the root.
+        for key, value in attrs.items():
+            if key in _TRACE_SCOPE_KEYS or key.startswith(_TRACE_SCOPE_PREFIXES):
+                self._trace_scope.setdefault(key, value)
         for key, value in self._trace_scope.items():
             attrs.setdefault(key, value)
         ctx = ot_trace.set_span_in_context(self._stack[-1]) if self._stack else None
@@ -133,7 +147,9 @@ class LangfuseExporter:
             return kept
         return {k: v for k, v in kept.items()
                 if not k.startswith(("langfuse.observation.input",
-                                     "langfuse.observation.output"))}
+                                     "langfuse.observation.output",
+                                     "langfuse.trace.input",
+                                     "langfuse.trace.output"))}
 
     def end_span(self, span: Any, attributes: dict[str, Any] | None = None) -> None:
         for key, value in self._attributes(attributes or {}).items():

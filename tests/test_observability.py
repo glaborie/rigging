@@ -82,14 +82,44 @@ def test_spans_carry_the_prompt_and_answer(tmp_path, monkeypatch):
 
     root = exporter.spans[0][1]
     assert json.loads(root["langfuse.observation.input"]) == "hash it"
-    assert json.loads(root["langfuse.trace.input"]) == "hash it"
     chat_input = json.loads(dict(exporter.spans)["chat"]["langfuse.observation.input"])
     assert {"role": "user", "content": "hash it"} in chat_input
 
     ended = dict(exporter.ended)
     assert json.loads(ended["invoke_agent"]["langfuse.observation.output"]) == "done"
-    assert json.loads(ended["invoke_agent"]["langfuse.trace.output"]) == "done"
     assert json.loads(ended["chat"]["langfuse.observation.output"]) == "done"
+
+
+def test_trace_input_output_are_not_written(tmp_path, monkeypatch):
+    """v4 has no trace-level input/output; the legacy pair is deliberately gone."""
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hash it", log=EventLog(tmp_path / "v4.db"),
+              client=FakeClient([{"role": "assistant", "content": "done"}]))
+
+    for _, attrs in exporter.spans + exporter.ended:
+        assert "langfuse.trace.input" not in attrs
+        assert "langfuse.trace.output" not in attrs
+
+
+def test_every_span_gets_an_explicit_observation_type(tmp_path, monkeypatch):
+    """A recognized type beats inference, and keeps the ATIF projection stable."""
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    spec = _spec(tmp_path, tools=["sha256_hex"], observability={"exporters": ["console"]})
+
+    run_agent(spec, "hash it", log=EventLog(tmp_path / "type.db"), client=FakeClient([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "sha256_hex", "arguments": {"text": "x"}}]},
+        {"role": "assistant", "content": "done"},
+    ]))
+
+    types = dict(exporter.spans)
+    assert types["invoke_agent"]["langfuse.observation.type"] == "agent"
+    assert types["chat"]["langfuse.observation.type"] == "generation"
+    assert types["execute_tool"]["langfuse.observation.type"] == "tool"
 
 
 def test_capture_content_false_keeps_content_out_of_spans(tmp_path, monkeypatch):
@@ -101,7 +131,12 @@ def test_capture_content_false_keeps_content_out_of_spans(tmp_path, monkeypatch)
               client=FakeClient([{"role": "assistant", "content": "ok"}]))
 
     for _, attrs in exporter.spans + exporter.ended:
-        assert not any(k.startswith("langfuse.observation.") for k in attrs)
+        assert "langfuse.observation.input" not in attrs
+        assert "langfuse.observation.output" not in attrs
+    for _, attrs in exporter.spans:
+        # Type is metadata, not content: it survives capture_content: false so the
+        # ATIF projection and v4 observation filters still work.
+        assert "langfuse.observation.type" in attrs
 
 
 def test_exporter_capture_content_false_drops_content(monkeypatch):
@@ -468,7 +503,7 @@ def test_generation_output_keeps_text_and_tool_calls(tmp_path, monkeypatch):
 
 
 def test_langfuse_exporter_repeats_trace_attributes_on_every_span():
-    """Langfuse filters per observation: session.id cannot live on the root only."""
+    """v4 filters per observation: trace context cannot live on the root only."""
     import rigging.observability as obs
 
     class FakeSpan:
@@ -484,9 +519,20 @@ def test_langfuse_exporter_repeats_trace_attributes_on_every_span():
                                     secret_key="sk")
     exporter._tracer = FakeTracer()
 
-    exporter.start_span("invoke_agent", {"session.id": "s_1", "langfuse.trace.tags": ["bench"]})
+    exporter.start_span("invoke_agent", {
+        "session.id": "s_1",
+        "langfuse.trace.tags": ["bench"],
+        "langfuse.trace.name": "redteam policy#4",
+        "langfuse.user.id": "u_1",
+        "langfuse.trace.metadata.tools_called": "refund_order",
+    })
     child = exporter.start_span("execute_tool", {"gen_ai.tool.name": "escalate_to_human"})
+    grandchild = exporter.start_span("chat", {"gen_ai.operation.name": "chat"})
 
-    assert child.attributes["session.id"] == "s_1"
-    assert child.attributes["langfuse.trace.tags"] == ["bench"]
+    for span in (child, grandchild):
+        assert span.attributes["session.id"] == "s_1"
+        assert span.attributes["langfuse.trace.tags"] == ["bench"]
+        assert span.attributes["langfuse.trace.name"] == "redteam policy#4"
+        assert span.attributes["langfuse.user.id"] == "u_1"
+        assert span.attributes["langfuse.trace.metadata.tools_called"] == "refund_order"
     assert child.attributes["gen_ai.tool.name"] == "escalate_to_human"
