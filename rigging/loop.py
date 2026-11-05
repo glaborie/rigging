@@ -132,6 +132,21 @@ def _trace_tags() -> dict[str, Any]:
     return {"langfuse.trace.tags": tags, "rigging.trace_tags": ",".join(tags)}
 
 
+def _trace_name() -> dict[str, Any]:
+    """`RIGGING_TRACE_NAME` → the trace's name in Langfuse.
+
+    Langfuse falls back to the root span's name, which is `invoke_agent` for every
+    run in this harness. A batch needs more than that to be readable: `bench.py`
+    leaves it unset (tags carry the model and repeat) and the red-team provider
+    sets it per probe, so a scan is a list of probes rather than a list of
+    identical rows.
+    """
+    name = settings.trace_name.strip()
+    if not name:
+        return {}
+    return {"langfuse.trace.name": name}
+
+
 def _tool_attributes(tools: set[str]) -> dict[str, Any]:
     """The tools a run called, as trace metadata.
 
@@ -487,6 +502,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.spec_hash": spec.spec_hash,
         **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
         **_trace_tags(),
+        **_trace_name(),
         **_content(spec, input_value=user_content, trace=True),
     })
     last: ModelResponse | None = None

@@ -81,6 +81,10 @@ class Settings(BaseSettings):
     # run can be filtered in the UI. `scripts/bench.py` sets this per model and
     # repeat; nothing else needs it.
     trace_tags: str = Field(default="", validation_alias="RIGGING_TRACE_TAGS")
+    # The trace's name in Langfuse (`langfuse.trace.name`). Without it every run
+    # shares the root span's name, so a scan of 33 probes is 33 rows called
+    # `invoke_agent`. `redteam/provider.py` sets this per probe.
+    trace_name: str = Field(default="", validation_alias="RIGGING_TRACE_NAME")
     # MLflow exporter (ADR-0020): the tracking server is HTTP, so no SDK is needed.
     mlflow_tracking_uri: str = Field(default="", validation_alias="MLFLOW_TRACKING_URI")
     mlflow_experiment_id: str = Field(default="0", validation_alias="MLFLOW_EXPERIMENT_ID")
