@@ -7,6 +7,9 @@
 #   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT="langfuse mlflow")
 #   APPROVE=0|1                            allow side-effecting tools without asking (demo only)
 #   DB=other.db                            alternate SQLite event log
+#   MODELS="a b" REPEATS=5                 `make bench`: models and passes per model
+#   VERBOSE=1                              log every HTTP request (`make serve`, `make web`) or
+#                                          the eval's full output (`make bench`)
 #
 # Gateway options (pick one, both are OpenAI-compatible HTTP):
 #   OpenRouter          the demo default — set RIGGING_PROFILE_OPENROUTER_API_KEY in .env
@@ -27,10 +30,13 @@ DB       ?=
 APPROVE  ?= 0
 # `EXPORT="langfuse mlflow"` -> `--export langfuse --export mlflow` (repeatable flag).
 EXPORT_ARGS = $(foreach e,$(EXPORT),--export $(e))
+SUITE    ?= examples/b2b-support/eval.yaml
+MODELS   ?= opencode-go/deepseek-v4.1-flash
+REPEATS  ?= 5
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean trace serve record \
+        retrieval hello demo run chat index eval bench up down logs clean trace serve record \
         test-browser browser-install
 
 help: ## show this help
@@ -52,6 +58,8 @@ help: ## show this help
 	@printf '\nTraces go to Langfuse Cloud: set LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY in .env.\n'
 	@printf '  make observability       check those keys (runs no agent, emits nothing)\n'
 	@printf '  make trace               run the example, then print the spans it produced\n'
+	@printf '\nBenchmark: make bench [MODELS="a b" REPEATS=5 EXPORT="langfuse mlflow"]\n'
+	@printf '  Langfuse traces by default; each run writes its own results/<utc>/ directory\n'
 	@printf '\nFirst run: make install && make gateway && make hello\n\n'
 
 install: ## venv with dev + the extras the test suite exercises (service, mcp)
@@ -158,6 +166,12 @@ demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make see
 eval: ## run the b2b-support eval suite: make eval [SUITE=...] [EXPORT=langfuse] [PROFILE=ollama]
 	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(EXPORT_ARGS) $(if $(PROFILE),--profile $(PROFILE),)
 
+bench: ## models x repeats into results/<utc>/ (langfuse by default): make bench [MODELS="a b" REPEATS=5]
+	uv run python scripts/bench.py $(or $(SUITE),examples/b2b-support/eval.yaml) \
+	  --models $(or $(MODELS),opencode-go/deepseek-v4.1-flash) \
+	  --repeats $(or $(REPEATS),5) \
+	  --cmd "uv run harness eval {suite} --model {model} --profile $(or $(PROFILE),default)" \
+	  $(if $(filter none,$(EXPORT)),--no-export,$(or $(EXPORT_ARGS),--export langfuse))$(if $(RUN_NAME), --run-name $(RUN_NAME),)$(if $(BENCH_OUT), --out $(BENCH_OUT),)$(if $(TIMEOUT), --timeout $(TIMEOUT),)$(if $(filter 1,$(VERBOSE)), -v,)
 
 up: gateway ## alias for `make gateway`
 

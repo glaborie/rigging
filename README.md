@@ -93,6 +93,7 @@ make demo PROMPT="What is the refund policy for ORD-1002?"   # deepseek via Open
 make demo MODEL=qwen3:8b PROFILE=ollama PROMPT="What is the refund policy for ORD-1002?"
 make eval                                        # event-log predicates, per-case table
 make eval EXPORT=langfuse                        # ...and one Langfuse trace per case
+make bench                                       # models x repeats -> results/<utc>/ (Langfuse)
 make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b PROFILE=ollama          # the fully local path
 

@@ -85,9 +85,11 @@ examples/parallel/                 two tools in one response (v0.6)
 examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 BENCHMARKING.md                    model-id syntax, profiles, reading the table
-scripts/bench.py                   models x repeats driver -> results/
+scripts/bench.py                   models x repeats driver -> results/<run>/ (one
+                                   directory per invocation, never overwritten)
 scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file
-results/                           published table + raw runs (evidence, not code)
+results/                           published table + raw runs (evidence, not code);
+                                   each bench.py invocation owns its own subdirectory
 tests/                             unit, SSE wire fixtures, loop invariants,
                                    and the opt-in browser tests (read + chat)
 ```
@@ -99,6 +101,7 @@ uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
 make test-browser            # opt-in: render the web view and run one turn in Chromium
+make bench                   # models x repeats -> results/<utc>/ (Langfuse traces by default)
 uv run harness init          # interview -> agents/<name>/agent.yaml (validated at load)
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)
