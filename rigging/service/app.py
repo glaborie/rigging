@@ -457,9 +457,11 @@ def create_app(
             try:
                 turn = bridge.prepare(body, request.headers.get("x-conversation-id"))
             except ModelNotFound as exc:
-                return _openai_error(404, str(exc), "model_not_found")
+                print(f"openai_chat prepare failed (model not found): {exc}")
+                return _openai_error(404, "model not found", "model_not_found")
             except RiggingError as exc:
-                return _openai_error(400, str(exc))
+                print(f"openai_chat prepare failed (invalid request): {exc}")
+                return _openai_error(400, "invalid request")
             if _session_running(db, turn.session_id):
                 # The same rule as the page (ADR-0023): two turns of one
                 # conversation cannot interleave into one history.
@@ -474,7 +476,8 @@ def create_app(
             try:
                 return JSONResponse(bridge.complete(turn, body))
             except TurnFailed as exc:
-                return _openai_error(502, str(exc), "run_failed")
+                print(f"openai_chat completion failed: {exc}")
+                return _openai_error(502, "run failed", "run_failed")
 
     @app.get("/api/runs/{run_id}", dependencies=guard)
     def get_run(run_id: str) -> dict[str, Any]:
