@@ -359,12 +359,14 @@ uv run python scripts/bench.py examples/b2b-support/eval.yaml \
   --run-name smoke
 ```
 
-`BENCH_OUT=/tmp/bench-check` (or `--out`) still works when you want the run out
-of the repository entirely. Promoting a run to the published table is a copy of
-its `table.md`, a deliberate act rather than a side effect of having run
-something.
+`BENCH_OUT=/tmp/bench-check` (or `--out`) still works when you want the run off
+the repository's disk entirely.
 
-A committed run should be one that completed. Failed runs are worth keeping when
+`results/` is gitignored, so a run never shows up in `git status` and nothing
+has to be cleaned up afterwards. What is kept is the run you point at in a
+review: the numbers below, and the `table.md` of the run that produced them.
+
+A kept run should be one that completed; failed runs are worth keeping when
 they document a real failure mode (the `opencode-go/glm-5.2` crash and the
 retired-model 404s are kept for that reason), not when they are a typo in the
 command.

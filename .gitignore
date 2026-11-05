@@ -6,6 +6,8 @@ __pycache__/
 *.db-wal
 *.db-shm
 runs/
+# benchmark evidence: every bench.py invocation writes its own results/<run>/
+results/
 dist/
 build/
 *.egg-info/

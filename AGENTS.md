@@ -92,8 +92,8 @@ scripts/seal_pii.py                one-off: seal plaintext contacts in a demo DB
 scripts/bench.py                   models x repeats driver -> results/<run>/ (one
                                    directory per invocation, never overwritten)
 scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file
-results/                           published table + raw runs (evidence, not code);
-                                   each bench.py invocation owns its own subdirectory
+results/                           benchmark evidence, gitignored: one directory per
+                                   bench.py invocation (`make bench` regenerates it)
 tests/                             unit, SSE wire fixtures, loop invariants,
                                    and the opt-in browser tests (read + chat)
 ```
@@ -113,7 +113,8 @@ uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see be
 
 - Work in the Unix environment (WSL/Linux). **Line endings must be LF** — a CRLF
   file breaks `make` and shell scripts.
-- Do not touch `.venv/`, `*.db`, `runs/`. They are gitignored; never commit them.
+- Do not touch `.venv/`, `*.db`, `runs/`, `results/`. They are gitignored; never
+  commit them.
 - Tests must not touch the network. Real-model runs are marked `-m live` and are
   opt-in. New behaviour needs a test in the same commit — a guardrail without a
   test asserting its verdict is not done.
