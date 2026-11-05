@@ -3,13 +3,14 @@
 > Build your own agent harness. You choose the loop, gateway, guardrails, retriever and tracing backend. 
 > The kit gives you the protocols, the registry, a replayable event log, approval gates and an eval harness.
 
-**Status: v0.7.0 released (2026-11-03).** The harness includes a registry-driven
+**Status: v0.8.0 released (2026-11-05).** The harness includes a registry-driven
 agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a web view over the
 same event log with bearer-token auth — read-only, or chat with in-page approvals.
-v0.8 adds the red-team suite and an opt-in OpenAI-compatible `/v1` surface, so a
-chat UI such as LibreChat can drive the same loop (ADR-0028; no approvals there).
+v0.8 adds the red-team suite, sealed PII at rest, and an opt-in
+OpenAI-compatible `/v1` surface, so a chat UI such as LibreChat can drive the
+same loop (ADR-0027, ADR-0028; no approvals there).
 See [`docs/milestones.md`](docs/milestones.md) for milestone evidence,
 [`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo, and
 [`docs/librechat.md`](docs/librechat.md) for the chat-UI wiring.

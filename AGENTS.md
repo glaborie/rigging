@@ -11,7 +11,7 @@ decision model, exporters) is a small protocol with swappable implementations.
 The project is a portfolio piece: **the code, the ADRs and the demo are the
 deliverable, and a reviewer's first five minutes matter as much as the tests.**
 
-Current state: v0.7.0 released (2026-11-03). The loop,
+Current state: v0.8.0 released (2026-11-05). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, web view with bearer auth
 (read-only, or chat with in-page approvals when `--manifest` is passed), the

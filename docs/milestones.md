@@ -3,15 +3,17 @@
 Each milestone is shippable on its own. The go-public gate is deliberately early:
 the first point at which a stranger can run it and understand it.
 
-**Current state (2026-11-03):** v0.1–v0.6 are shipped (v0.6.3 was the last patch:
+**Current state (2026-11-05):** v0.1–v0.7 are shipped (v0.6.3 was the last patch:
 v0.6.0 was tagged, then patched for doc drift and the page bug in v0.6.1,
 hardened in v0.6.2, and given an explicit proxy-trust model in v0.6.3). v0.5
 delivered the manifest schema, entry-points discovery, the architecture/ADR pass,
 the README recording and the read-only web widget; v0.6 delivered subagents, the
-MLflow exporter, service auth and opt-in parallel tool execution. v0.7.0 makes
+MLflow exporter, service auth and opt-in parallel tool execution; v0.7.0 made
 the web view drivable: chat and in-page approvals, opt-in and token-gated
-(ADR-0023). 204 offline tests plus two browser tests; ruff + `mypy --strict`
-clean. The demos are [`showcase-v0.7.md`](showcase-v0.7.md) (browser) and
+(ADR-0023). v0.8.0 adds the red-team suite, sealed PII at rest (ADR-0027) and the
+opt-in OpenAI-compatible `/v1` surface for LibreChat (ADR-0028). 374 offline
+tests plus two browser tests; ruff + `mypy --strict` clean. The demos are
+[`showcase-v0.7.md`](showcase-v0.7.md) (browser) and
 [`showcase-v0.6.md`](showcase-v0.6.md) (four commands).
 
 **Post-v0.4 hardening (2026-11-02)** — not a milestone, but it changed how the
