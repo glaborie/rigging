@@ -189,10 +189,11 @@ tags: ["bench", "opencode-go/deepseek-v4.1-flash", "rep-1"]
 ```
 
 Tags come from `RIGGING_TRACE_TAGS`, which `bench.py` sets on each subprocess;
-`loop._trace_tags()` turns it into `langfuse.trace.tags` on the root span
-(ADR-0012 postscript) and into the `rigging.trace_tags` attribute that the
-MLflow exporter writes as its `rigging.tags` run tag. They are labels, not
-content, so they survive `capture_content: false`.
+`loop._trace_tags()` turns it into `langfuse.trace.tags` on every span
+(ADR-0012 postscript; v4 filters observations, not traces) and into the
+`rigging.trace_tags` attribute that the MLflow exporter writes as its
+`rigging.tags` run tag. They are labels, not content, so they survive
+`capture_content: false`.
 
 What you need for spans to arrive:
 

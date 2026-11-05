@@ -1,8 +1,10 @@
 """Read recent Langfuse observations — the "did my span land?" check.
 
-Langfuse Cloud's `GET /api/public/traces` is removed on 2026-11-16, so this uses
-`GET /api/public/v2/observations?fromStartTime=…&toStartTime=…`. Credentials come
-from `Settings`, which means `.env` works without exporting anything.
+Langfuse v4 reads observations directly: `GET /api/public/v2/observations` with a
+bounded start-time window, cursor pagination and explicit field groups. The v1
+`GET /api/public/traces` endpoint is removed on 2026-11-16 and is not used here.
+Credentials come from `Settings`, which means `.env` works without exporting
+anything.
 
 Usage (normally via `make trace`):
     uv run python scripts/langfuse_tail.py --wait 60
@@ -48,7 +50,13 @@ def fetch(start: dt.datetime, end: dt.datetime, limit: int = 50) -> list[dict[st
     pk, sk = _credentials()
     response = httpx.get(
         f"{_host()}/api/public/v2/observations",
-        params={"fromStartTime": _iso(start), "toStartTime": _iso(end), "limit": limit},
+        params={
+            "fromStartTime": _iso(start),
+            "toStartTime": _iso(end),
+            "limit": limit,
+            # v2 returns only the requested groups; usage is not in core/basic.
+            "fields": "core,basic,usage",
+        },
         auth=(pk, sk),
         timeout=30.0,
     )

@@ -28,9 +28,10 @@ default is one ATIF file per trace; `--combine` concatenates the session's trace
 into one trajectory (step and tool-call ids renumbered, each step tagged with its
 `trace_id`), which is what a conversation-level viewer wants.
 
-Langfuse's v2 observations endpoint is the only read path: the session endpoint
-that lists a session's traces is deprecated (removal 2026-11-16), so this
-script will need a v2 trace listing when it goes.
+Langfuse's v4 Observations API (`GET /api/public/v2/observations`) is the only
+read path: v4 removed `GET /api/public/sessions/{id}` and `GET /api/public/traces`,
+so a session is a `sessionId` filter and its traces are a client-side group by
+`traceId`.
 """
 
 from __future__ import annotations
@@ -44,7 +45,7 @@ import sys
 import time
 import urllib.parse
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -53,7 +54,10 @@ import httpx
 from rigging.config import settings
 
 ATIF_SCHEMA = "ATIF-v1.7"
-OBSERVATION_FIELDS = "core,io,metadata"
+OBSERVATION_FIELDS = "core,basic,io,metadata"
+#: Observations are always queried with a window. A session can be older than any
+#: convenient default, so the floor is deliberately wide; `--since` narrows it.
+DEFAULT_SINCE = "2000-01-01T00:00:00Z"
 
 
 def credentials() -> tuple[str, dict[str, str]]:
@@ -92,19 +96,37 @@ def get(client: httpx.Client, path: str, params: dict[str, Any] | None = None) -
     raise SystemExit("Langfuse rate-limited the request (429); try again later")
 
 
-def session_traces(client: httpx.Client, session_id: str) -> list[dict[str, Any]]:
-    data = get(client, f"/api/public/sessions/{session_id}")
-    traces = data.get("traces") or []
-    if not traces:
-        raise SystemExit(f"session {session_id!r} has no traces")
-    return traces
+def _to_start_time() -> str:
+    """A window end slightly in the future, so a fast clock cannot hide a row."""
+    return (datetime.now(UTC) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def trace_observations(client: httpx.Client, trace_id: str) -> list[dict[str, Any]]:
+def observations(
+    client: httpx.Client,
+    *,
+    fields: str,
+    since: str = DEFAULT_SINCE,
+    filters: list[dict[str, Any]] | None = None,
+    trace_id: str | None = None,
+) -> list[dict[str, Any]]:
+    """Cursor-paginated v2 observations, always bounded by start time.
+
+    v4 requires a bounded query; `cursor` replaces `page`, and `fields` selects
+    the groups (`io` is absent, not null, when it is not requested).
+    """
     rows: list[dict[str, Any]] = []
     cursor: str | None = None
     while True:
-        params = {"traceId": trace_id, "limit": 100, "fields": OBSERVATION_FIELDS}
+        params: dict[str, Any] = {
+            "fromStartTime": since,
+            "toStartTime": _to_start_time(),
+            "limit": 100,
+            "fields": fields,
+        }
+        if filters is not None:
+            params["filter"] = json.dumps(filters)
+        if trace_id is not None:
+            params["traceId"] = trace_id
         if cursor:
             params["cursor"] = cursor
         data = get(client, "/api/public/v2/observations", params)
@@ -112,6 +134,43 @@ def trace_observations(client: httpx.Client, trace_id: str) -> list[dict[str, An
         cursor = (data.get("meta") or {}).get("cursor")
         if not cursor:
             return rows
+
+
+def session_traces(client: httpx.Client, session_id: str,
+                   *, since: str = DEFAULT_SINCE) -> list[dict[str, Any]]:
+    """The session's traces, reconstructed from observation rows.
+
+    v4 has no session object: filter observations by `sessionId`, then group by
+    `traceId`. `fields=...trace_context` is what puts `traceName` and `tags` on
+    each row, so a trajectory keeps the name the red team gave it.
+    """
+    rows = observations(
+        client,
+        fields="core,basic,trace_context",
+        since=since,
+        filters=[{"type": "string", "column": "sessionId", "operator": "=",
+                  "value": session_id}],
+    )
+    traces: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        trace_id = row.get("traceId")
+        if not trace_id or trace_id in traces:
+            continue
+        traces[str(trace_id)] = {
+            "id": trace_id,
+            "name": row.get("traceName"),
+            "tags": row.get("tags") or [],
+            "projectId": row.get("projectId"),
+        }
+    if not traces:
+        raise SystemExit(f"session {session_id!r} has no observations")
+    return list(traces.values())
+
+
+def trace_observations(client: httpx.Client, trace_id: str,
+                       *, since: str = DEFAULT_SINCE) -> list[dict[str, Any]]:
+    return observations(client, fields=OBSERVATION_FIELDS, since=since,
+                        trace_id=trace_id)
 
 
 def _attr(obs: dict[str, Any], name: str) -> Any:
@@ -565,6 +624,8 @@ def main() -> int:
                     help="one trajectory for the whole session instead of one file per trace")
     ap.add_argument("--db", default="runs/eval.db",
                     help="eval event log to read verdicts from (default: runs/eval.db)")
+    ap.add_argument("--since", default=DEFAULT_SINCE,
+                    help="earliest observation start time (ISO 8601, default: %(default)s)")
     a = ap.parse_args()
 
     kind, ident = parse_target(a.target)
@@ -574,17 +635,18 @@ def main() -> int:
     verdicts = load_verdicts(Path(a.db))
 
     with httpx.Client(base_url=host, headers=headers, timeout=60) as client:
-        trace_refs = session_traces(client, ident) if kind == "session" else [{"id": ident}]
+        trace_refs = (session_traces(client, ident, since=a.since)
+                      if kind == "session" else [{"id": ident}])
         docs: list[dict[str, Any]] = []
         for trace in trace_refs:
             trace_id = trace["id"]
-            observations = trace_observations(client, trace_id)
-            run_id = next((_attr(o, "rigging.run_id") for o in observations
+            rows = trace_observations(client, trace_id, since=a.since)
+            run_id = next((_attr(o, "rigging.run_id") for o in rows
                            if not o.get("parentObservationId")), None)
             verdict = verdicts.get(str(run_id)) if run_id else None
             docs.append(build_trajectory(
-                ident if kind == "session" else _session_of(observations, ident),
-                trace, observations, verdict=verdict))
+                ident if kind == "session" else _session_of(rows, ident),
+                trace, rows, verdict=verdict))
 
     if a.combine and len(docs) > 1:
         docs = [combine_trajectories(docs, docs[0]["session_id"])]
