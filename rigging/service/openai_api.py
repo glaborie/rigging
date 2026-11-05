@@ -100,8 +100,38 @@ class PreparedTurn:
     session_id: str
 
 
-class ModelNotFound(RiggingError):
+#: What a client is told. The exception's own text is for the server and tests:
+#: returning it lets a gateway message or a path leak through the HTTP response
+#: (CodeQL's "information exposure through an exception"). The handler looks the
+#: public message up by code, so no exception string is ever the response body.
+PUBLIC_MESSAGES = {
+    "invalid_request": "invalid request",
+    "model_not_found": "model not found; GET /v1/models lists the one model this "
+                       "endpoint serves",
+    "missing_conversation_id": "missing X-Conversation-Id; set it to "
+                               "'{{LIBRECHAT_BODY_CONVERSATIONID}}' in librechat.yaml",
+    "no_user_message": "no user message in `messages`",
+    "conversation_too_large": "this endpoint accepts at most 200 messages / 200000 "
+                             "characters per conversation",
+    "message_too_long": "this endpoint accepts at most 32000 characters per user message",
+    "unsupported_content": "this endpoint accepts text messages only",
+    "run_failed": "run failed; see the event log for this run's error",
+}
+
+
+class RequestError(RiggingError):
+    """A 400 with a fixed public code; the exception text stays server-side."""
+
+    def __init__(self, code: str, detail: str) -> None:
+        super().__init__(detail)
+        self.code = code
+
+
+class ModelNotFound(RequestError):
     """The client asked for a model this server does not serve."""
+
+    def __init__(self, detail: str) -> None:
+        super().__init__("model_not_found", detail)
 
 
 class TurnFailed(RiggingError):
@@ -137,11 +167,12 @@ class OpenAIBridge:
         placeholder from one conversation resolve inside another.
         """
         if not conversation_id or not conversation_id.strip():
-            raise RiggingError(
+            raise RequestError(
+                "missing_conversation_id",
                 "missing X-Conversation-Id: this server keys a session (and its PII "
                 "sentinel map) by conversation, so the header is required. In "
                 "librechat.yaml set `X-Conversation-Id: "
-                "'{{LIBRECHAT_BODY_CONVERSATIONID}}'` on the custom endpoint."
+                "'{{LIBRECHAT_BODY_CONVERSATIONID}}'` on the custom endpoint.",
             )
         digest = hashlib.sha256(conversation_id.strip().encode()).hexdigest()[:16]
         return f"{SESSION_PREFIX}{digest}"
@@ -359,7 +390,8 @@ def _text(message: OpenAIMessage) -> str:
             continue
         kind = part.get("type")
         if kind not in (None, "text", "input_text"):
-            raise RiggingError(
+            raise RequestError(
+                "unsupported_content",
                 f"this endpoint accepts text messages only; got a {kind!r} part")
         text = part.get("text")
         if isinstance(text, str):
@@ -377,18 +409,21 @@ def _split(body: ChatCompletionRequest) -> tuple[str, list[Message]]:
     answers, and a client that needs its own system prompt has the manifest.
     """
     if len(body.messages) > MAX_MESSAGES:
-        raise RiggingError(
+        raise RequestError(
+            "conversation_too_large",
             f"conversation has {len(body.messages)} messages; this endpoint accepts "
             f"at most {MAX_MESSAGES}")
     texts = [_text(message) for message in body.messages]
     total = sum(len(text) for text in texts)
     if total > MAX_CONVERSATION_CHARS:
-        raise RiggingError(
+        raise RequestError(
+            "conversation_too_large",
             f"conversation is {total} characters; this endpoint accepts at most "
             f"{MAX_CONVERSATION_CHARS}")
     for message, text in zip(body.messages, texts, strict=True):
         if message.role == "user" and len(text) > MAX_MESSAGE_CHARS:
-            raise RiggingError(
+            raise RequestError(
+                "message_too_long",
                 f"message of {len(text)} characters exceeds "
                 f"{MAX_MESSAGE_CHARS}; raise limits on the manifest, not the request")
 
@@ -400,7 +435,7 @@ def _split(body: ChatCompletionRequest) -> tuple[str, list[Message]]:
         if message.role == "user" and texts[index].strip():
             last = index
     if last < 0:
-        raise RiggingError("no user message in `messages`")
+        raise RequestError("no_user_message", "no user message in `messages`")
     prompt = texts[last].strip()
 
     history: list[Message] = []

@@ -295,7 +295,7 @@ holding confidential data either way.
 ## 8. Verification commands
 
 ```bash
-make check                       # 373 offline tests: auth, headers, limiter, redaction, chat, /v1
+make check                       # 374 offline tests: auth, headers, limiter, redaction, chat, /v1
 make test-browser                # the page renders under the CSP, and a turn is approved
 uv run pytest tests/test_service_proxy.py   # XFF trusted vs untrusted peer
 

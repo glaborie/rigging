@@ -29,9 +29,11 @@ from rigging.errors import RiggingError
 from rigging.events import project_escalations
 from rigging.service.chat import ChatRunner
 from rigging.service.openai_api import (
+    PUBLIC_MESSAGES,
     ChatCompletionRequest,
     ModelNotFound,
     OpenAIBridge,
+    RequestError,
     TurnFailed,
 )
 from rigging.service.ratelimit import RateLimiter
@@ -456,12 +458,18 @@ def create_app(
             """The OpenAI write path (ADR-0028): one agent, one turn, no approvals."""
             try:
                 turn = bridge.prepare(body, request.headers.get("x-conversation-id"))
-            except ModelNotFound as exc:
-                print(f"openai_chat prepare failed (model not found): {exc}")
-                return _openai_error(404, "model not found", "model_not_found")
-            except RiggingError as exc:
-                print(f"openai_chat prepare failed (invalid request): {exc}")
-                return _openai_error(400, "invalid request")
+            except ModelNotFound:
+                return _openai_error(404, PUBLIC_MESSAGES["model_not_found"],
+                                     "model_not_found")
+            except RequestError as exc:
+                # The response body is a constant looked up by code. Returning
+                # `str(exc)` would let an internal detail reach the client
+                # (CodeQL: information exposure through an exception).
+                return _openai_error(
+                    400, PUBLIC_MESSAGES.get(exc.code, PUBLIC_MESSAGES["invalid_request"])
+                )
+            except RiggingError:
+                return _openai_error(400, PUBLIC_MESSAGES["invalid_request"])
             if _session_running(db, turn.session_id):
                 # The same rule as the page (ADR-0023): two turns of one
                 # conversation cannot interleave into one history.
@@ -475,9 +483,8 @@ def create_app(
                 )
             try:
                 return JSONResponse(bridge.complete(turn, body))
-            except TurnFailed as exc:
-                print(f"openai_chat completion failed: {exc}")
-                return _openai_error(502, "run failed", "run_failed")
+            except TurnFailed:
+                return _openai_error(502, PUBLIC_MESSAGES["run_failed"], "run_failed")
 
     @app.get("/api/runs/{run_id}", dependencies=guard)
     def get_run(run_id: str) -> dict[str, Any]:

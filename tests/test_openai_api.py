@@ -31,6 +31,7 @@ from rigging.service.openai_api import (  # noqa: E402
     ChatCompletionRequest,
     OpenAIBridge,
     PreparedTurn,
+    TurnFailed,
 )
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
@@ -271,6 +272,23 @@ def test_the_openai_surface_does_not_exist_without_a_bridge(tmp_path):
     EventLog(db).close()
     client = TestClient(create_app(db, tokens=[TOKEN]))
     assert client.get("/v1/models", headers=HEADERS).status_code in (404, 405)
+
+
+def test_a_run_error_detail_is_not_returned(tmp_path):
+    """The response body is a constant, not the exception text (CodeQL)."""
+    bridge = _bridge(tmp_path, [{"content": "ok"}])
+    client = _app(tmp_path, bridge)
+
+    def boom(turn, body):
+        raise TurnFailed("internal detail: sk-do-not-echo")
+
+    bridge.complete = boom  # type: ignore[method-assign]
+    response = client.post("/v1/chat/completions", headers=HEADERS,
+                           json=_completion([{"role": "user", "content": "hi"}]))
+    assert response.status_code == 502
+    error = response.json()["error"]
+    assert error["type"] == "run_failed"
+    assert "sk-do-not-echo" not in error["message"]
 
 
 def test_the_bridge_refuses_to_exist_without_a_token(tmp_path):

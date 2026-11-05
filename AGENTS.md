@@ -16,7 +16,7 @@ client, registry, event log, manifest, guardrails, retriever, Laya decision mode
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, web view with bearer auth
 (read-only, or chat with in-page approvals when `--manifest` is passed), the
 opt-in OpenAI-compatible `/v1` surface for LibreChat (`--openai-api`, ADR-0028),
-subagents and opt-in parallel tool execution are implemented and tested (373
+subagents and opt-in parallel tool execution are implemented and tested (374
 offline tests plus two browser tests; ruff + `mypy --strict` clean). All four
 exit-criteria demos verified live.
 
