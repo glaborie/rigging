@@ -439,24 +439,45 @@ def test_streaming_waits_for_output_guardrails(tmp_path):
 # ---------------------------------------------------------------- no approvals
 
 
-def test_a_side_effecting_tool_is_denied_without_an_approval_channel(tmp_path, monkeypatch):
+def test_a_side_effecting_tool_is_denied_without_an_approval_channel(tmp_path):
     """Hard rule 4 through the new surface: the loop denies, and says so.
 
     The manifest's policy is `cli`; serving it verbatim would block a request
     thread on a terminal prompt. The bridge passes `AutoDenyApproval` instead, so
     the refund is attempted, refused and recorded — and the answer is the denial,
     not a claim that money moved.
+
+    The spec and tool live here on purpose: the demo manifest's `refund_window`
+    guardrail reads the gitignored `examples/b2b-support/demo.db`, which CI does
+    not seed. This test is about the approval channel, not the fixture.
     """
-    bridge = _bridge(tmp_path, [
-        {"content": "", "tool_calls": [{"id": "c1", "name": "refund_order",
-                                        "arguments": {"order_id": "ORD-1002",
-                                                      "amount": 112.5,
-                                                      "reason": "damaged"}}]},
+
+    def refund(amount: int) -> str:
+        """Refund money."""
+        return f"refunded {amount}"
+
+    refund.__rigging_tool__ = {"name": "refund", "description": "Refund money.",
+                               "side_effecting": True}
+    registry = Registry()
+    registry.add("tool", "refund", refund)
+
+    spec_path = tmp_path / "refund-agent.yaml"
+    spec_path.write_text(yaml.safe_dump({
+        "name": "refund-agent", "model": "fake", "system_prompt": "be terse",
+        "limits": {"max_steps": 4}, "tools": ["refund"],
+        "approval": {"policy": "cli", "side_effecting_tools": ["refund"]},
+    }))
+    fake = FakeClient([
+        {"content": "", "tool_calls": [{"id": "c1", "name": "refund",
+                                        "arguments": {"amount": 10}}]},
         {"content": "I couldn't refund: the approval was denied."},
     ])
+    bridge = OpenAIBridge(load_manifest(str(spec_path)), str(tmp_path / "runs.db"),
+                          client_factory=lambda: fake, registry=registry)
     client = _app(tmp_path, bridge)
     response = client.post("/v1/chat/completions", headers=HEADERS,
-                           json=_completion([{"role": "user", "content": "refund ORD-1002"}]))
+                           json=_completion([{"role": "user", "content": "refund 10"}],
+                                            model="refund-agent"))
     assert response.status_code == 200
     assert "denied" in response.json()["choices"][0]["message"]["content"]
 
@@ -466,5 +487,5 @@ def test_a_side_effecting_tool_is_denied_without_an_approval_channel(tmp_path, m
     finally:
         log.close()
     verdicts = [e["payload"] for e in events if e["type"] == "approval_verdict"]
-    assert verdicts == [{"tool": "refund_order", "approved": False,
+    assert verdicts == [{"tool": "refund", "approved": False,
                          "note": "denied: no approver attached to this run (unattended)"}]
