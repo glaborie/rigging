@@ -5,11 +5,27 @@
         --models opencode-go/deepseek-v4.1-flash --repeats 5 \
         --cmd "uv run harness eval {suite} --model {model} --profile default"
 
-Writes results/raw/<model>-<rep>.txt, results/summary.json and results/table.md.
+Every invocation writes its own directory — `<out>/<run name>/`, where the run
+name is the UTC start time (`results/2026-11-05T08-16-33Z/`) unless `--run-name`
+says otherwise. A second run therefore never overwrites the first one's evidence:
+
+    results/2026-11-05T08-16-33Z/raw/<model>-<rep>.txt
+    results/2026-11-05T08-16-33Z/summary.json
+    results/2026-11-05T08-16-33Z/table.md
+
+Progress streams while the benchmark runs, not after it: one line per eval case
+(the harness writes `[i/n] case PASS 8.8s` to stderr as each case finishes), one
+summary line per rep with the elapsed time and an estimate of what is left.
+`-v` echoes the child's whole output as it arrives; `-q` keeps the per-case
+lines off.
 
 Traces: every rep runs with `--export langfuse` (override with `--export NAME`,
 disable with `--no-export`) and sets RIGGING_TRACE_TAGS, so the harness tags the
-trace `bench,<model>,rep-<n>`. One eval case is one trace.
+trace `bench,<model>,rep-<n>`. One eval case is one trace. Exporters are
+best-effort *during* a run by design — the loop swallows exporter errors so a
+dead backend can never fail a run — so the target is validated instead before
+the first model call: an unreachable MLflow server, a missing experiment id or a
+deleted experiment exits 2 here rather than recording nothing.
 
 Parsing: prefers JSON on stdout (the `--json` envelope or a bare list of
 {"case","passed","latency_s","cost_usd","steps"}), falls back to scraping
@@ -26,12 +42,15 @@ import shlex
 import statistics
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
 DEFAULT_CMD = "uv run harness eval {suite} --model {model}"
 DEFAULT_EXPORT = ["langfuse"]
 LINE_RE = re.compile(r"^\s*(?P<case>[\w.\-]+)\b.*?\b(?P<verdict>PASS|FAIL)\b", re.M | re.I)
+# `harness eval` progress: "[3/14] refund-in-window-approved PASS 8.8s".
+PROGRESS_RE = re.compile(r"^\[\d+/\d+\]\s")
 
 
 def build_cmd(template: str, suite: str, model: str, exports: list[str]) -> list[str]:
@@ -52,6 +71,7 @@ def run_tags(model: str, rep: int) -> str:
 
     Tags are what make a benchmark filterable in the Langfuse UI — every case is
     its own trace, and `gen_ai.request.model` alone cannot tell rep 1 from rep 5.
+    MLflow reads the same value as the `rigging.tags` run tag.
     """
     return f"bench,{model},rep-{rep + 1}"
 
@@ -62,6 +82,23 @@ def langfuse_keys_present() -> bool:
 
     return bool((os.environ.get("LANGFUSE_PUBLIC_KEY") or settings.langfuse_public_key)
                 and (os.environ.get("LANGFUSE_SECRET_KEY") or settings.langfuse_secret_key))
+
+
+def mlflow_problem() -> str | None:
+    """Why `--export mlflow` could not record anything, or None when it can.
+
+    Builds the exporter and validates it exactly as the harness will at assembly:
+    same tracking URI, token and experiment id. An unreachable server, a typo'd
+    id and a deleted experiment are therefore caught here — before the benchmark
+    spends a single model call on runs that would be silently dropped.
+    """
+    from rigging.observability import MLflowExporter
+
+    try:
+        MLflowExporter().validate()
+    except Exception as exc:
+        return str(exc)
+    return None
 
 
 def wilson(k: int, n: int, z: float = 1.96) -> tuple[float, float]:
@@ -121,8 +158,90 @@ def fmt(v, spec: str = ".1f") -> str:
     return "n/a" if v is None else format(v, spec)
 
 
-def main() -> int:
-    ap = argparse.ArgumentParser()
+# ------------------------------------------------------------------ output layout
+
+
+def run_stamp(now: float | None = None) -> str:
+    """UTC start time, filename-safe: `2026-11-05T08-16-33Z`."""
+    return time.strftime("%Y-%m-%dT%H-%M-%SZ", time.gmtime(now))
+
+
+def fresh_dir(base: Path, name: str) -> Path:
+    """`base/name`, or `base/name-2`, `-3`... — an existing run is never reused.
+
+    The point of the per-run directory is that evidence survives a rerun; two
+    `--run-name smoke` invocations must not end up in the same folder.
+    """
+    base.mkdir(parents=True, exist_ok=True)
+    target = base / name
+    suffix = 2
+    while target.exists():
+        target = base / f"{name}-{suffix}"
+        suffix += 1
+    return target
+
+
+def duration(seconds: float) -> str:
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    return f"{int(seconds // 60)}m{int(seconds % 60):02d}s"
+
+
+# ---------------------------------------------------------------------- one run
+
+
+def run_once(cmd: list[str], *, env: dict[str, str], timeout: int,
+             verbose: bool, progress: bool) -> tuple[str, str, int, float]:
+    """Run one eval subprocess, streaming its output as it arrives.
+
+    stdout and stderr are read on separate threads: a captured pipe would leave
+    the terminal silent for the whole rep, which on a 14-case suite at 900s of
+    timeout is indistinguishable from a hang. `harness eval` writes one
+    `[i/n] case PASS|FAIL` line per case to stderr; that is the progress stream.
+    `verbose` forwards every line instead, `progress=False` forwards none.
+    """
+    out_buf: list[str] = []
+    err_buf: list[str] = []
+    started = time.monotonic()
+
+    def pump(stream, buf: list[str], *, is_stderr: bool) -> None:
+        for line in stream:
+            buf.append(line)
+            if verbose:
+                sys.stderr.write(f"  │ {line.rstrip()}\n")
+            elif progress and is_stderr and PROGRESS_RE.match(line):
+                sys.stderr.write(f"    {line.rstrip()}\n")
+            else:
+                continue
+            sys.stderr.flush()
+
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            text=True, bufsize=1, env=env)
+    threads = [
+        threading.Thread(target=pump, args=(proc.stdout, out_buf),
+                         kwargs={"is_stderr": False}, daemon=True),
+        threading.Thread(target=pump, args=(proc.stderr, err_buf),
+                         kwargs={"is_stderr": True}, daemon=True),
+    ]
+    for t in threads:
+        t.start()
+    timed_out = False
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        rc, timed_out = -1, True
+    for t in threads:
+        t.join(timeout=5)
+    stderr = "".join(err_buf)
+    if timed_out:
+        stderr += f"\n[timeout after {timeout}s]"
+    return "".join(out_buf), stderr, rc, time.monotonic() - started
+
+
+def main(argv: list[str] | None = None) -> int:
+    ap = argparse.ArgumentParser(description="run harness eval over models x repeats")
     ap.add_argument("suite")
     ap.add_argument("--models", nargs="+", required=True)
     ap.add_argument("--repeats", type=int, default=5)
@@ -130,51 +249,80 @@ def main() -> int:
     ap.add_argument("--safety-prefix", default="safety-")
     ap.add_argument("--safety-cases", nargs="*", default=[], help="case names that are invariants")
     ap.add_argument("--timeout", type=int, default=900)
-    ap.add_argument("--out", default="results")
+    ap.add_argument("--out", default="results",
+                    help="parent directory; each invocation gets its own subdirectory")
+    ap.add_argument("--run-name", default=None,
+                    help="name of this run's directory (default: UTC start time)")
+    ap.add_argument("-v", "--verbose", action="store_true",
+                    help="echo the eval's full stdout/stderr as it arrives")
+    ap.add_argument("-q", "--quiet", action="store_true",
+                    help="no per-case progress lines; only rep summaries and the table")
     g = ap.add_mutually_exclusive_group()
     g.add_argument("--export", action="append", metavar="NAME",
                    help="exporter for every eval run, repeatable (default: langfuse)")
     g.add_argument("--no-export", action="store_true",
                    help="no exporters: no traces, nothing to configure")
-    a = ap.parse_args()
+    a = ap.parse_args(argv)
 
     exports = [] if a.no_export else (a.export or DEFAULT_EXPORT)
     if "langfuse" in exports and not langfuse_keys_present():
         print("warning: --export langfuse but LANGFUSE_PUBLIC_KEY / LANGFUSE_SECRET_KEY "
               "are unset; the harness will skip spans", file=sys.stderr)
+    if "mlflow" in exports:
+        problem = mlflow_problem()
+        if problem:
+            print("error: --export mlflow cannot record runs, so the benchmark was "
+                  f"not started:\n  {problem}", file=sys.stderr)
+            print("  fix MLFLOW_TRACKING_URI / MLFLOW_EXPERIMENT_ID in .env, or drop "
+                  "--export mlflow", file=sys.stderr)
+            return 2
     if exports:
         print(f"traces: {', '.join(exports)} · tags bench,<model>,rep-<n>", file=sys.stderr)
 
-    out = Path(a.out)
-    (out / "raw").mkdir(parents=True, exist_ok=True)
+    run_dir = fresh_dir(Path(a.out), a.run_name or run_stamp())
+    (run_dir / "raw").mkdir(parents=True, exist_ok=True)
+    total_runs = len(a.models) * a.repeats
+    print(f"suite {a.suite} · {len(a.models)} model(s) · {a.repeats} repeats · "
+          f"{total_runs} runs · timeout {a.timeout}s", file=sys.stderr)
+    print(f"results: {run_dir}", file=sys.stderr)
+
     summary: dict[str, dict] = {}
     per_case: dict[str, dict[str, list[bool]]] = {}
+    done = 0
+    bench_started = time.monotonic()
 
     for model in a.models:
         trials: list[dict] = []
         wall: list[float] = []
         crashes = 0
         for rep in range(a.repeats):
+            done += 1
             cmd = build_cmd(a.cmd, a.suite, model, exports)
             env = {**os.environ, "RIGGING_TRACE_TAGS": run_tags(model, rep)}
-            t0 = time.monotonic()
-            try:
-                p = subprocess.run(cmd, capture_output=True, text=True, timeout=a.timeout,
-                                   env=env)
-                stdout, stderr, rc = p.stdout, p.stderr, p.returncode
-            except subprocess.TimeoutExpired as e:
-                stdout, stderr, rc = _txt(e.stdout), _txt(e.stderr) + "\n[timeout]", -1
-            wall.append(time.monotonic() - t0)
+            print(f"\n[{done}/{total_runs}] {model} rep {rep + 1}/{a.repeats} · "
+                  f"{time.strftime('%H:%M:%S')}", file=sys.stderr, flush=True)
+            stdout, stderr, rc, elapsed = run_once(
+                cmd, env=env, timeout=a.timeout, verbose=a.verbose, progress=not a.quiet)
+            wall.append(elapsed)
             safe = re.sub(r"[^\w.\-]", "_", model)
-            (out / "raw" / f"{safe}-{rep}.txt").write_text(
-                stdout + (f"\n--- stderr ---\n{stderr}" if stderr else ""))
+            raw_path = run_dir / "raw" / f"{safe}-{rep}.txt"
+            raw_path.write_text(stdout + (f"\n--- stderr ---\n{stderr}" if stderr else ""))
+
             rows = parse(stdout)
+            passed = sum(r["passed"] for r in rows)
             if not rows:  # a run that produced no parsable cases is a crash, not a pass
                 crashes += 1
                 tail = [ln for ln in (stderr or stdout).strip().splitlines() if ln.strip()][-3:]
-                print("  no cases parsed; last output: " + " | ".join(tail), file=sys.stderr)
+                print("    no cases parsed; last output: " + " | ".join(tail), file=sys.stderr)
+                print(f"    raw output: {raw_path}", file=sys.stderr)
             trials.extend(rows)
-            print(f"{model} rep {rep + 1}/{a.repeats}: {len(rows)} cases, rc={rc}", file=sys.stderr)
+            eta = ""
+            if done < total_runs:
+                elapsed_total = time.monotonic() - bench_started
+                eta = f" · ~{duration(elapsed_total / done * (total_runs - done))} left"
+            print(f"[{done}/{total_runs}] {model} rep {rep + 1}/{a.repeats}: "
+                  f"{passed}/{len(rows)} cases pass, rc={rc}, {duration(elapsed)}{eta}",
+                  file=sys.stderr, flush=True)
 
         def rate(rows):
             k = sum(r["passed"] for r in rows)
@@ -202,7 +350,7 @@ def main() -> int:
             "suite_wall_s_median": median(wall), "flaky_cases": flaky,
         }
 
-    (out / "summary.json").write_text(json.dumps(summary, indent=2))
+    (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
 
     lines = [
         f"Suite `{a.suite}`, {a.repeats} repeats per model. 95% Wilson intervals.\n",
@@ -229,8 +377,10 @@ def main() -> int:
             r = per_case[m].get(c)
             cells.append(f"{sum(r)}/{len(r)}" if r else "n/a")
         lines.append(f"| {c}{' (invariant)' if is_safety(c) else ''} | " + " | ".join(cells) + " |")
-    (out / "table.md").write_text("\n".join(lines) + "\n")
+    (run_dir / "table.md").write_text("\n".join(lines) + "\n")
     print("\n".join(lines))
+    print(f"\nwrote {run_dir / 'table.md'}, {run_dir / 'summary.json'} and "
+          f"{len(list((run_dir / 'raw').iterdir()))} raw file(s)", file=sys.stderr)
     return 0
 
 

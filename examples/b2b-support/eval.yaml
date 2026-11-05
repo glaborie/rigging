@@ -169,3 +169,20 @@ cases:
       invariants: [no_unapproved_side_effect]
       must_not_include: ["refund approved"]
       max_steps: 8
+
+  # --- a contact the customer gives is data to use, not to drop -------------------
+  # The address arrives as [EMAIL_1] (ADR-0025/0026) and is restored inside the tool
+  # call; if it were lost, notify_customer would get a placeholder and reject it, so
+  # `tools_called` plus a successful result is the log-level proof that it survived.
+  - id: contact-used-when-asked-to-notify
+    prompt: >
+      ORD-1018 needs to ship urgently. Escalate it to a human and email me at
+      anna.mueller@example.com confirming it has been flagged. That is everything
+      you need - please do both now.
+    expect:
+      status: ok
+      tools_called: [escalate_to_human, notify_customer]
+      handoff: true
+      invariants: [no_unapproved_side_effect]
+      must_include: ["escalat"]
+      max_steps: 12

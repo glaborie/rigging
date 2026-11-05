@@ -14,8 +14,9 @@ deliverable, and a reviewer's first five minutes matter as much as the tests.**
 Current state: v0.7.0 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, web view with bearer auth
-(read-only, or chat with in-page approvals when `--manifest` is passed),
-subagents and opt-in parallel tool execution are implemented and tested (204
+(read-only, or chat with in-page approvals when `--manifest` is passed), the
+opt-in OpenAI-compatible `/v1` surface for LibreChat (`--openai-api`, ADR-0028),
+subagents and opt-in parallel tool execution are implemented and tested (374
 offline tests plus two browser tests; ruff + `mypy --strict` clean). All four
 exit-criteria demos verified live.
 
@@ -64,16 +65,20 @@ rigging/
   events.py         SQLite append-only log, projections, JSONL export
   manifest.py       YAML load, JSON Schema validation, single-level defaults
   redact.py         the security boundary
+  crypto.py         AES-GCM sealing for PII that has to be stored (ADR-0027)
+  vault.py          encrypted per-session stores: sentinel maps (ADR-0027)
+  pii_store.py      where a stored contact lives, and the AAD that binds it
   client/           OpenAI-compatible httpx client + hand-written SSE parser
   guardrails/       pii (redact + pseudonymise), injection, consequential_action, commitment
   retriever/        fts5 (works), qdrant (v0.3 stub)
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations
   service/          FastAPI + SSE view of the event log (ADR-0018); chat.py
-                    adds the opt-in write path and WebApproval (ADR-0023)
+                    adds the opt-in write path and WebApproval (ADR-0023);
+                    openai_api.py serves /v1 for a chat UI, no approvals (ADR-0028)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   init_agent.py     `harness init`: the manifest interview, validated before writing
-  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve
+  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve|pii
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered
@@ -85,9 +90,14 @@ examples/parallel/                 two tools in one response (v0.6)
 examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 BENCHMARKING.md                    model-id syntax, profiles, reading the table
-scripts/bench.py                   models x repeats driver -> results/
+docs/red-team.md                   promptfoo scans: the target, the controls, the findings
+redteam/                           promptfoo provider, configs and generated probes (v0.8)
+scripts/seal_pii.py                one-off: seal plaintext contacts in a demo DB (ADR-0027)
+scripts/bench.py                   models x repeats driver -> results/<run>/ (one
+                                   directory per invocation, never overwritten)
 scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file
-results/                           published table + raw runs (evidence, not code)
+results/                           benchmark evidence, gitignored: one directory per
+                                   bench.py invocation (`make bench` regenerates it)
 tests/                             unit, SSE wire fixtures, loop invariants,
                                    and the opt-in browser tests (read + chat)
 ```
@@ -99,6 +109,9 @@ uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
 make test-browser            # opt-in: render the web view and run one turn in Chromium
+redteam/run.sh controls      # opt-in, live: promptfoo known-good cases before a scan
+redteam/run.sh scan          # ...and the unattended red team (needs npx + .env)
+make bench                   # models x repeats -> results/<utc>/ (Langfuse traces by default)
 uv run harness init          # interview -> agents/<name>/agent.yaml (validated at load)
 uv run harness tools         # registry sanity
 uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see below)
@@ -106,7 +119,8 @@ uv run harness run examples/hello/agent.yaml "hello"   # needs a gateway (see be
 
 - Work in the Unix environment (WSL/Linux). **Line endings must be LF** — a CRLF
   file breaks `make` and shell scripts.
-- Do not touch `.venv/`, `*.db`, `runs/`. They are gitignored; never commit them.
+- Do not touch `.venv/`, `*.db`, `runs/`, `results/`. They are gitignored; never
+  commit them.
 - Tests must not touch the network. Real-model runs are marked `-m live` and are
   opt-in. New behaviour needs a test in the same commit — a guardrail without a
   test asserting its verdict is not done.
@@ -149,6 +163,7 @@ make trace                      # runs the observability example, then reads the
 make trace MANIFEST=examples/b2b-support/agent.yaml PROMPT="I need switches"
 make trace MODEL=qwen3:8b PROFILE=ollama   # ...against host Ollama; no gateway container needed
 make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
+redteam/run.sh scan         # one trace per probe: named by plugin, tagged by posture
 make web EXPORT=langfuse        # one trace per browser turn
 make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
 make eval MODEL=qwen3:8b PROFILE=ollama    # the fully local path

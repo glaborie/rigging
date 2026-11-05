@@ -6,6 +6,18 @@ the provider routing lives in the harness. Getting a benchmark to produce
 numbers instead of crashes is therefore mostly about two strings — the suite
 path and the model id — plus the credential profile.
 
+`make bench` fills in the demo's defaults:
+
+```bash
+make bench                                    # b2b suite, deepseek, 5 repeats, Langfuse traces
+make bench REPEATS=1 RUN_NAME=smoke           # one pass, into results/smoke/
+make bench MODELS="qwen3:8b" PROFILE=ollama   # a local model, no gateway container
+make bench EXPORT="langfuse mlflow"           # one trace per case *and* one MLflow run per case
+```
+
+Underneath it is this command — use it directly when you need a flag the target
+does not expose:
+
 ```bash
 RIGGING_MAX_RETRIES=6 uv run python scripts/bench.py examples/b2b-support/eval.yaml \
   --models "opencode-go/deepseek-v4.1-flash" \
@@ -22,6 +34,33 @@ honoured by `harness run` and `harness eval`; it does not make a 503 with every
 provider in cooldown succeed, it only rides out a short one. `--timeout` must
 exceed the slowest single run, otherwise a slow case is recorded as a crash.
 
+## `make bench`
+
+`make bench` is one line in the Makefile over `scripts/bench.py`; the script
+still owns the behaviour. What the target pins:
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `SUITE` | `examples/b2b-support/eval.yaml` | suite file |
+| `MODELS` | `opencode-go/deepseek-v4.1-flash` | one or more model ids, space separated |
+| `REPEATS` | `5` | passes per model |
+| `EXPORT` | `langfuse` | exporter(s), space separated → repeated `--export`; `EXPORT=none` passes `--no-export` |
+| `PROFILE` | `default` | credential profile (`default` = `$RIGGING_BASE_URL`, e.g. OmniRoute) |
+| `RUN_NAME` | UTC start time | name of this run's directory under `results/` |
+| `BENCH_OUT` | `results` | parent directory for run directories |
+| `TIMEOUT` | script default (900) | per-run seconds |
+| `VERBOSE` | off | `VERBOSE=1` streams the eval's whole output (`-v`) |
+| `MODEL` | (unset) | not used here — `make bench` takes the plural `MODELS` |
+
+Two consequences of the defaults: the target always overrides the manifest's
+pinned `credential_profile` with `PROFILE`, and it always exports unless you ask
+otherwise — which is why `EXPORT=none` exists (no keys, no network, slightly
+faster). The remaining flags (`--safety-cases`, `--json`, a custom `--cmd`) stay
+on the script.
+
+Every invocation writes its own `results/<run-name>/` directory, so a repeat
+never overwrites an earlier run's evidence. See [Reading the output](#reading-the-output).
+
 ## The three things that go wrong
 
 ### 1. The suite path is `eval.yaml`, not `suite.yaml`
@@ -32,7 +71,7 @@ suite.yaml" only because that is the generic name for the file.
 
 A wrong path does not fail loudly. `bench.py` treats a run that produced no
 parsable cases as a **crashed run**, so you get a table full of zeroes and the
-reason is buried in `results/raw/<model>-0.txt`:
+reason is buried in the run's `raw/<model>-0.txt`:
 
 ```
 FileNotFoundError: [Errno 2] No such file or directory: 'examples/b2b-support/suite.yaml'
@@ -106,15 +145,44 @@ run needs (profile, exports, `--db`) goes in the literal part of `--cmd`.
 | `--safety-prefix` | `safety-` | case-name prefix treated as a safety invariant |
 | `--safety-cases` | none | explicit invariant case names, for suites that do not use the prefix |
 | `--timeout` | 900 | per-run seconds; a timeout counts as a crashed run |
-| `--out` | `results` | output directory |
+| `--out` | `results` | parent directory; each invocation gets its own subdirectory |
+| `--run-name` | UTC start time | name of this run's directory (`results/<run-name>/`) |
+| `-v`, `--verbose` | off | echo the eval's full stdout/stderr as it arrives |
+| `-q`, `--quiet` | off | no per-case progress lines; only rep summaries and the table |
 | `--export` | `langfuse` | exporter for every eval run, repeatable |
 | `--no-export` | off | no traces at all: nothing to configure, slightly faster |
+
+## Watching a run
+
+The driver streams: each eval case prints one line on stderr the moment it
+finishes, so an 18-case suite that takes eight minutes never looks hung.
+
+```
+suite examples/b2b-support/eval.yaml · 1 model(s) · 5 repeats · 5 runs · timeout 900s
+results: results/2026-11-05T08-16-33Z
+
+[1/5] opencode-go/deepseek-v4.1-flash rep 1/5 · 08:16:33
+    [1/14] refund-in-window-approved   PASS   6.2s
+    [2/14] over-authority-guardrail    PASS   9.1s
+    ...
+[1/5] opencode-go/deepseek-v4.1-flash rep 1/5: 18/18 cases pass, rc=0, 2m20s · ~9m20s left
+```
+
+The `[i/n] case PASS|FAIL` lines come from `harness eval` itself (one per case,
+on stderr, flushed), which is why a plain `uv run harness eval ...` is no longer
+silent either — use `--no-progress` there to turn them off. When `--cmd` runs
+something other than `harness eval`, those lines are simply absent and the
+driver falls back to one summary line per rep.
+
+`-v` forwards the child's entire stdout and stderr, prefixed with `  │`, for the
+case where a run fails in a way the summary line does not explain. It does not
+change what lands in `raw/`.
 
 ## Traces in Langfuse
 
 Every rep runs with `--export langfuse`, and `bench.py` tags the trace with
 `bench,<model>,rep-<n>`. One eval case is one trace, so a 5-repeat run of the
-14-case b2b suite is 70 traces — filter by tag in Langfuse, not by name.
+18-case b2b suite is 90 traces — filter by tag in Langfuse, not by name.
 
 ```
 tags: ["bench", "opencode-go/deepseek-v4.1-flash", "rep-1"]
@@ -122,8 +190,9 @@ tags: ["bench", "opencode-go/deepseek-v4.1-flash", "rep-1"]
 
 Tags come from `RIGGING_TRACE_TAGS`, which `bench.py` sets on each subprocess;
 `loop._trace_tags()` turns it into `langfuse.trace.tags` on the root span
-(ADR-0012 postscript). They are labels, not content, so they survive
-`capture_content: false`.
+(ADR-0012 postscript) and into the `rigging.trace_tags` attribute that the
+MLflow exporter writes as its `rigging.tags` run tag. They are labels, not
+content, so they survive `capture_content: false`.
 
 What you need for spans to arrive:
 
@@ -149,6 +218,69 @@ uv run python scripts/bench.py examples/b2b-support/eval.yaml \
 `--no-export` is for a benchmark of the harness itself: no network, no keys, and
 one fewer thing that can slow a run down.
 
+### Traces in MLflow
+
+MLflow is a run-level backend (ADR-0020): one eval **case** becomes one MLflow
+run with the metrics (tokens, steps, latency, cost, chat/tool call counts), so a
+5-repeat run of an 18-case suite is 90 runs in one experiment, not one run with
+70 children. What makes them usable:
+
+- all 70 are tagged `rigging.tags = bench,<model>,rep-<n>` — filter on that tag
+  or search the run name; without it every run is called `rigging` and five
+  repeats are indistinguishable;
+- the model is a param/tag (`gen_ai.request.model`), the status a tag
+  (`rigging.status`, `FINISHED` only when the run ended `ok`).
+
+MLflow needs a tracking server that already has the experiment you point it at.
+`MLFLOW_EXPERIMENT_ID` is an **id, not a name**, and the exporter never creates
+the target. Three things can therefore be wrong, and all three fail at assembly —
+before the first model call — with exit code 2:
+
+```
+harness run: mlflow experiment '1' (rigging-bench) on http://localhost:5000 is deleted.
+MLflow never reuses an id, so a deleted and re-created experiment has a new one:
+`uvx mlflow experiments search` lists the ids, then update MLFLOW_EXPERIMENT_ID
+```
+
+```
+harness run: no mlflow experiment with id '99' on http://localhost:5000. Create it first
+(`uvx mlflow experiments create --experiment-name <name>`) and set MLFLOW_EXPERIMENT_ID
+to the id it prints
+```
+
+```
+harness run: mlflow tracking server unreachable at http://localhost:5000: ...
+```
+
+Why it fails rather than warns: the *running* loop deliberately swallows exporter
+errors so observability can never fail a run (ADR-0012, ADR-0020 postscript), which
+means a wrong target records nothing and still reports `ok`. Validating at assembly
+is the other half of that bargain. `bench.py` runs the same check up front and
+refuses to start, rather than spending 85 model calls on runs that go nowhere:
+
+```
+error: --export mlflow cannot record runs, so the benchmark was not started:
+  no mlflow experiment with id '99' on http://localhost:5000. ...
+```
+
+The deleted-experiment case is the one that actually bites: `uvx mlflow
+experiments delete --experiment-id 1` followed by a re-create gives you id `2`, not
+`1`. `uvx mlflow experiments search` is the source of truth (add `--view-type ALL`
+to see deleted ones).
+
+Start a server for a local benchmark; no `[mlflow]` extra exists because the
+exporter speaks the REST API over `httpx` and never imports the SDK:
+
+```bash
+uvx mlflow server --backend-store-uri sqlite:///mlflow.db --port 5000
+uvx mlflow experiments create --experiment-name rigging-bench   # -> "Created ... with id 1"
+MLFLOW_EXPERIMENT_ID=1 uv run python scripts/bench.py ...        # experiment 0 is "Default"
+```
+
+An `MLFLOW_TRACKING_TOKEN` is sent as a bearer header on every tracking call
+(including the validation) for servers that require auth.
+
+
 ### Filtering by tool
 
 Langfuse derives **Called Tool Names** from the tool observations, so the filter
@@ -167,16 +299,22 @@ writes `metadata.tools_called = "escalate_to_human,load_skill,lookup_order"`.
 
 ## Reading the output
 
-Three files are written to `--out`:
+Each invocation writes its own directory — `results/<run-name>/`, where the run
+name is the UTC start time unless `--run-name` says otherwise. A rerun therefore
+never overwrites the previous run; a reused `--run-name` gets `-2`, `-3` appended
+rather than sharing a folder. Three things live there:
 
 - `raw/<model>-<rep>.txt` — the run's stdout, plus a `--- stderr ---` section
-  when the run wrote anything there. This is the only place a crash explains
-  itself. The model id is sanitised into the filename:
-  `opencode-go/deepseek-v4.1-flash` becomes
+  when the run wrote anything there (the per-case progress lines included). This
+  is the only place a crash explains itself. The model id is sanitised into the
+  filename: `opencode-go/deepseek-v4.1-flash` becomes
   `opencode-go_deepseek-v4.1-flash`, `openrouter:foo/bar` becomes
   `openrouter_foo_bar`.
 - `summary.json` — per-model rates, medians and crashed-run counts.
 - `table.md` — the published table.
+
+Runs recorded before this layout sit flat in `results/` (`results/raw/`,
+`results/table.md`); they are evidence and were not moved.
 
 Columns:
 
@@ -206,21 +344,32 @@ Columns:
 - **Flaky cases** — cases that both passed and failed across repeats. Any entry
   here is a finding, not noise to be averaged away.
 
-## Practising without overwriting the published table
+## Practising without touching the published table
 
-`--out` exists so an experiment cannot clobber `results/`:
+Nothing to do: every invocation is already isolated in its own directory, so a
+one-repeat smoke run cannot clobber the published one.
 
 ```bash
+make bench REPEATS=1 RUN_NAME=smoke
+# -> results/smoke/{raw/,summary.json,table.md}
+
 uv run python scripts/bench.py examples/b2b-support/eval.yaml \
   --models "opencode-go/deepseek-v4.1-flash" --repeats 1 \
   --cmd "uv run harness eval {suite} --model {model} --profile default" \
-  --out /tmp/bench-check
+  --run-name smoke
 ```
 
-The committed `results/` should hold runs that completed. Failed runs are worth
-keeping when they document a real failure mode (the `opencode-go/glm-5.2` crash
-and the retired-model 404s are kept for that reason), not when they are a typo
-in the command.
+`BENCH_OUT=/tmp/bench-check` (or `--out`) still works when you want the run off
+the repository's disk entirely.
+
+`results/` is gitignored, so a run never shows up in `git status` and nothing
+has to be cleaned up afterwards. What is kept is the run you point at in a
+review: the numbers below, and the `table.md` of the run that produced them.
+
+A kept run should be one that completed; failed runs are worth keeping when
+they document a real failure mode (the `opencode-go/glm-5.2` crash and the
+retired-model 404s are kept for that reason), not when they are a typo in the
+command.
 
 ## Slow and flaky providers
 
@@ -235,7 +384,8 @@ uv run python scripts/bench.py ... --timeout 1800
 
 ## Current results
 
-`results/table.md` is the published table. As of v0.6.3:
+The published table is the `table.md` of whichever run was promoted into
+`results/table.md`. As of v0.6.3:
 
 | Model | Task success | Crashed runs | Median latency | Traces |
 |---|---|---|---|---|

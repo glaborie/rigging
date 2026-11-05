@@ -26,6 +26,7 @@ Suite format (YAML):
 
 from __future__ import annotations
 
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -188,7 +189,15 @@ def _with_profile(spec: AgentSpec, profile: str | None) -> AgentSpec:
 
 def run_suite(path: str | Path, *, db: str | Path | None = None, model: str | None = None,
               only: list[str] | None = None, exporters: list[str] | None = None,
-              profile: str | None = None) -> tuple[list[CaseResult], dict[str, Any]]:
+              profile: str | None = None, progress: bool = False,
+              ) -> tuple[list[CaseResult], dict[str, Any]]:
+    """Run every case in the suite, in file order.
+
+    `progress` writes one line per finished case to **stderr**, flushed:
+    `[3/14] refund-in-window-approved PASS 8.8s`. stdout stays the table (or the
+    `--json` envelope), so a driver can parse it while a human — or
+    `scripts/bench.py` — watches the suite move.
+    """
     suite = _load_suite(path)
     spec = load_manifest(str(Path(path).parent / suite["manifest"]))
     if model:
@@ -198,11 +207,15 @@ def run_suite(path: str | Path, *, db: str | Path | None = None, model: str | No
     db_path = Path(db or "runs/eval.db")
     db_path.parent.mkdir(parents=True, exist_ok=True)
     allow = (suite.get("approval") or "deny").lower() == "allow"
-    results = [
-        run_case(case, spec, db=db_path, approval_allow=allow)
-        for case in suite["cases"]
-        if not only or (case.get("id") in only)
-    ]
+    cases = [c for c in suite["cases"] if not only or (c.get("id") in only)]
+    results: list[CaseResult] = []
+    for index, case in enumerate(cases, 1):
+        result = run_case(case, spec, db=db_path, approval_allow=allow)
+        results.append(result)
+        if progress:
+            verdict = "PASS" if result.passed else "FAIL"
+            print(f"[{index}/{len(cases)}] {result.id:<28} {verdict} {result.latency_s:6.1f}s",
+                  file=sys.stderr, flush=True)
     return results, suite
 
 

@@ -8,8 +8,11 @@ agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a web view over the
 same event log with bearer-token auth — read-only, or chat with in-page approvals.
-See [`docs/milestones.md`](docs/milestones.md) for milestone evidence and
-[`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo.
+v0.8 adds the red-team suite and an opt-in OpenAI-compatible `/v1` surface, so a
+chat UI such as LibreChat can drive the same loop (ADR-0028; no approvals there).
+See [`docs/milestones.md`](docs/milestones.md) for milestone evidence,
+[`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo, and
+[`docs/librechat.md`](docs/librechat.md) for the chat-UI wiring.
 
 ![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
 
@@ -84,6 +87,10 @@ uv run harness chat examples/hello/agent.yaml
 # Handoffs waiting for a human (escalation events, newest first)
 uv run harness escalations
 
+# Read a contact back out of the demo DB (needs RIGGING_PII_KEY, ADR-0027)
+uv run harness pii open examples/b2b-support/demo.db
+uv run harness pii open examples/b2b-support/demo.db --table notifications --limit 5
+
 # Offline: replay a recorded transcript instead of calling the API
 uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
 
@@ -93,11 +100,13 @@ make demo PROMPT="What is the refund policy for ORD-1002?"   # deepseek via Open
 make demo MODEL=qwen3:8b PROFILE=ollama PROMPT="What is the refund policy for ORD-1002?"
 make eval                                        # event-log predicates, per-case table
 make eval EXPORT=langfuse                        # ...and one Langfuse trace per case
+make bench                                       # models x repeats -> results/<utc>/ (Langfuse)
 make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
 make eval MODEL=qwen3:8b PROFILE=ollama          # the fully local path
 
 # Drive the same agent from a browser: type, watch the tools run, approve a refund
 RIGGING_SERVICE_TOKEN=demo make web              # add EXPORT=langfuse for one trace per turn
+VERBOSE=1 make web                               # ...and one stdout line per HTTP request
 # http://127.0.0.1:8000 — token "demo"
 ```
 
@@ -253,6 +262,27 @@ and asserts the tool result appears. The postscript in
 [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)
 has the honest version.
 
+### Use it from LibreChat (or any OpenAI-compatible UI)
+
+`--openai-api` serves `/v1/models` and `/v1/chat/completions` for the same agent,
+so a chat UI can drive the loop directly:
+
+```bash
+RIGGING_SERVICE_TOKEN=demo RIGGING_SERVICE_ALLOW_PLAINTEXT=1 \
+uv run harness serve --manifest examples/b2b-support/agent.yaml \
+  --openai-api --host 0.0.0.0
+```
+
+The UI needs one header — `X-Conversation-Id:
+'{{LIBRECHAT_BODY_CONVERSATIONID}}'` — because the session (and the PII sentinel
+map that gives a tool the real address behind `[EMAIL_1]`) is keyed by
+conversation. Side-effecting tools are **denied** there: the UI has no approval
+channel, so the loop gets `AutoDenyApproval` (ADR-0028). `make web` stays the one
+surface that shows an approval as a decision. The two-command path is
+`make openai` in one terminal and `make librechat` in another; wiring,
+`librechat.yaml` and the troubleshooting table:
+[`docs/librechat.md`](docs/librechat.md).
+
 ## Decision models: cloud or local
 
 Decision models share the `DecisionModel` protocol and registry; select one by
@@ -284,6 +314,30 @@ live scoring run hit the daily free quota (HTTP 429), so it has no numbers yet.
 The local endpoint defaults to `http://localhost:11434`; set `OLLAMA_BASE_URL` to
 override it.
 
+## PII at rest
+
+The model path never sees a raw value: guardrails replace an address with
+`[EMAIL_1]` before it reaches the model, the event log or any exporter
+(ADR-0025). What a *tool* writes down is different — it has to store the real
+contact to do its job — so those columns are sealed with AES-256-GCM from a key
+in `.env` (ADR-0027):
+
+```bash
+# one key, 32 bytes; never committed, never logged
+python -c "from rigging.crypto import new_key; print(new_key())"   # -> RIGGING_PII_KEY=...
+uv run harness pii open examples/b2b-support/demo.db               # table|row|state|value
+uv run python scripts/seal_pii.py examples/b2b-support/demo.db --vacuum   # migrate old plaintext
+```
+
+The command prints what the file holds *and* what it opens to, so a legacy
+plaintext row and a value sealed with another key are distinguishable. What the
+ciphertext protects is a file that leaks — a backup, a disk image, a database
+attached to a ticket. It does not protect a compromised host or a leaked `.env`:
+the process must be able to read the key. The event log and the traces stay
+plaintext SQLite; they hold placeholders, not contacts. The limits are stated in
+[ADR-0027](docs/adr/0027-pii-at-rest-is-sealed-where-it-is-stored.md) and
+[`docs/threat-model.md`](docs/threat-model.md) rather than implied.
+
 ## Repository layout
 
 ```
@@ -292,6 +346,9 @@ rigging/            the package (protocols, registry, loop, client, CLI)
   types.py          canonical message/tool/reasoning types
   registry.py       decorator registry + entry-point discovery
   events.py         event-sourced run log (SQLite)
+  crypto.py         AES-GCM sealing for PII that has to be stored (ADR-0027)
+  vault.py          encrypted per-session sentinel maps (ADR-0027)
+  pii_store.py      where a stored contact lives, and the AAD that binds it
   loop.py           the agent loop (v0.1)
   client/           OpenAI-compatible HTTP client + SSE parser
   guardrails/       four deterministic built-ins
@@ -323,6 +380,8 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/adr/`](docs/adr/) — 23 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 - [`docs/threat-model.md`](docs/threat-model.md) — assets, threats, controls, non-claims
+- [`docs/red-team.md`](docs/red-team.md) — promptfoo scans of the demo agent, judged on the run, not the reply
+- [`docs/librechat.md`](docs/librechat.md) — drive the agent from a chat UI over `/v1` (ADR-0028)
 - [`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) — drive the agent from a browser, approve a refund
 - [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 

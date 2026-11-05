@@ -4,9 +4,12 @@
 #   MANIFEST=examples/hello/agent.yaml     which agent to run (make web defaults to b2b-support)
 #   PROMPT="..."                           the user message
 #   MODEL=qwen3:8b                         override the manifest's model
-#   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT=langfuse)
+#   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT="langfuse mlflow")
 #   APPROVE=0|1                            allow side-effecting tools without asking (demo only)
 #   DB=other.db                            alternate SQLite event log
+#   MODELS="a b" REPEATS=5                 `make bench`: models and passes per model
+#   VERBOSE=1                              log every HTTP request (`make serve`, `make web`) or
+#                                          the eval's full output (`make bench`)
 #
 # Gateway options (pick one, both are OpenAI-compatible HTTP):
 #   OpenRouter          the demo default — set RIGGING_PROFILE_OPENROUTER_API_KEY in .env
@@ -25,11 +28,16 @@ EXPORT   ?=
 HELLO_MODEL ?= freellm/codestral   # proven live through OmniRoute -> freellmapi
 DB       ?=
 APPROVE  ?= 0
+# `EXPORT="langfuse mlflow"` -> `--export langfuse --export mlflow` (repeatable flag).
+EXPORT_ARGS = $(foreach e,$(EXPORT),--export $(e))
+SUITE    ?= examples/b2b-support/eval.yaml
+MODELS   ?= opencode-go/deepseek-v4.1-flash
+REPEATS  ?= 5
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
-        retrieval hello demo run chat index eval up down logs clean trace serve record \
-        test-browser browser-install
+        retrieval hello demo run chat index eval bench up down logs clean trace serve record \
+        test-browser browser-install openai librechat
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -39,7 +47,7 @@ help: ## show this help
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@printf '\nSetup:\n'
 	@printf '  uv sync --extra dev      core + test/lint tooling (make install adds service, mcp)\n'
-	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser]\n'
+	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser, vault]\n'
 	@printf '\nModel access (one is enough):\n'
 	@printf '  RIGGING_PROFILE_OPENROUTER_API_KEY=...   in .env — the demo default (deepseek)\n'
 	@printf '  ollama pull qwen3:8b     fully local, the weakest model the demo must pass on\n'
@@ -47,13 +55,17 @@ help: ## show this help
 	@printf '\nCompose profiles:\n'
 	@printf '  (default)      omniroute only — smallest footprint, enough to run an agent\n'
 	@printf '  retrieval      + qdrant on :6345 (6333/6335/6340 are taken by other stacks)\n'
+	@printf '  librechat      + LibreChat on :3080 (with `make openai` on the host)\n'
+	@printf '\nChat UI: make openai (harness /v1 on :8000) + make librechat (LibreChat :3080)\n'
 	@printf '\nTraces go to Langfuse Cloud: set LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY in .env.\n'
 	@printf '  make observability       check those keys (runs no agent, emits nothing)\n'
 	@printf '  make trace               run the example, then print the spans it produced\n'
+	@printf '\nBenchmark: make bench [MODELS="a b" REPEATS=5 EXPORT="langfuse mlflow"]\n'
+	@printf '  Langfuse traces by default; each run writes its own results/<utc>/ directory\n'
 	@printf '\nFirst run: make install && make gateway && make hello\n\n'
 
 install: ## venv with dev + the extras the test suite exercises (service, mcp)
-	uv sync --extra dev --extra service --extra mcp
+	uv sync --extra dev --extra service --extra mcp --extra vault
 
 check: ## what CI runs: lint + typecheck + tests (no network)
 	$(MAKE) --no-print-directory lint typecheck test
@@ -120,28 +132,45 @@ hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
 	  $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),) \
+	  $(EXPORT_ARGS) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
 
 record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
 	uv run python scripts/record_demo.py
 	uv run python scripts/cast_to_gif.py
 
-serve: ## read-only web view of the event log: http://127.0.0.1:8000
-	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),)
+serve: ## read-only web view of the event log: http://127.0.0.1:8000 [VERBOSE=1 logs every request]
+	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
+	  $(if $(filter 1,$(VERBOSE)),--verbose,)
 
-web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN)
+web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN) EXPORT=langfuse
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
 	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
 	  $(if $(EXPORT),--export $(EXPORT),)
 
+openai: ## OpenAI-compatible /v1 for LibreChat on :8000 (needs RIGGING_SERVICE_TOKEN)
+	RIGGING_SERVICE_ALLOW_PLAINTEXT=1 uv run harness serve \
+	  $(if $(DB),--db $(DB),) \
+	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
+	  --openai-api --host $(or $(OPENAI_HOST),0.0.0.0) \
+	  --port $(or $(OPENAI_PORT),8000) \
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(EXPORT_ARGS)
+
+librechat: ## LibreChat on :3080 (compose profile; run `make openai` in another terminal)
+	@if [ -z "$${RIGGING_SERVICE_TOKEN}" ] && ! grep -qE '^RIGGING_SERVICE_TOKEN=.+' .env 2>/dev/null; then \
+	  printf 'warning: RIGGING_SERVICE_TOKEN is empty; set it in .env or LibreChat cannot authenticate\n'; fi
+	docker compose --profile librechat up -d librechat
+	@printf 'LibreChat: http://localhost:%s\n' "$(or $(LIBRECHAT_PORT),3080)"
+	@printf 'The harness must be running: make openai\n'
+
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),)
+	  $(EXPORT_ARGS)
 
-seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
+seed: ## build the demo fixture DB (deterministic; contacts sealed when RIGGING_PII_KEY is set)
 	uv run python examples/b2b-support/seed.py
 
 index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds for qdrant
@@ -150,10 +179,17 @@ index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds f
 demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make seed)
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),) $(if $(filter 1,$(APPROVE)),--yes,)
+	  $(EXPORT_ARGS) $(if $(filter 1,$(APPROVE)),--yes,)
 
 eval: ## run the b2b-support eval suite: make eval [SUITE=...] [EXPORT=langfuse] [PROFILE=ollama]
-	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),) $(if $(PROFILE),--profile $(PROFILE),)
+	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(EXPORT_ARGS) $(if $(PROFILE),--profile $(PROFILE),)
+
+bench: ## models x repeats into results/<utc>/ (langfuse by default): make bench [MODELS="a b" REPEATS=5]
+	uv run python scripts/bench.py $(or $(SUITE),examples/b2b-support/eval.yaml) \
+	  --models $(or $(MODELS),opencode-go/deepseek-v4.1-flash) \
+	  --repeats $(or $(REPEATS),5) \
+	  --cmd "uv run harness eval {suite} --model {model} --profile $(or $(PROFILE),default)" \
+	  $(if $(filter none,$(EXPORT)),--no-export,$(or $(EXPORT_ARGS),--export langfuse))$(if $(RUN_NAME), --run-name $(RUN_NAME),)$(if $(BENCH_OUT), --out $(BENCH_OUT),)$(if $(TIMEOUT), --timeout $(TIMEOUT),)$(if $(filter 1,$(VERBOSE)), -v,)
 
 up: gateway ## alias for `make gateway`
 

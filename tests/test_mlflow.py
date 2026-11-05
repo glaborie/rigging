@@ -21,6 +21,10 @@ def _recorder() -> tuple[list[tuple[str, dict]], httpx.MockTransport]:
         calls.append((request.url.path, body))
         if request.url.path.endswith("/runs/create"):
             return httpx.Response(200, json={"run": {"info": {"run_id": "ml-1"}}})
+        if request.url.path.endswith("/experiments/get"):
+            return httpx.Response(200, json={"experiment": {
+                "experiment_id": request.url.params.get("experiment_id", "0"),
+                "name": "Default", "lifecycle_stage": "active"}})
         return httpx.Response(200, json={})
 
     return calls, httpx.MockTransport(handler)
@@ -45,7 +49,7 @@ def _run(exporter: MLflowExporter, *, status: str = "ok") -> None:
 
 def test_one_run_maps_to_create_log_batch_and_update():
     calls, transport = _recorder()
-    _run(MLflowExporter(transport=transport))
+    _run(MLflowExporter(transport=transport, experiment_id="0"))
 
     paths = [path for path, _ in calls]
     assert paths == ["/api/2.0/mlflow/runs/create",
@@ -69,6 +73,32 @@ def test_one_run_maps_to_create_log_batch_and_update():
 
     update = calls[2][1]
     assert update == {"run_id": "ml-1", "status": "FINISHED", "end_time": update["end_time"]}
+
+
+def test_benchmark_rep_tags_reach_mlflow():
+    """RIGGING_TRACE_TAGS labels a run here too, or a 5-rep benchmark is 70
+    indistinguishable runs named `rigging`."""
+    calls, transport = _recorder()
+    exporter = MLflowExporter(transport=transport)
+    root = exporter.start_span("invoke_agent", {
+        "gen_ai.request.model": "qwen3:8b",
+        "rigging.trace_tags": "bench,qwen3:8b,rep-3",
+    })
+    exporter.end_span(root, {"rigging.status": "ok"})
+    exporter.close()
+
+    tags = {t["key"]: t["value"] for t in calls[0][1]["tags"]}
+    assert tags["rigging.tags"] == "bench,qwen3:8b,rep-3"
+
+
+def test_the_loop_writes_tags_a_non_langfuse_exporter_can_read(monkeypatch):
+    import rigging.loop as loop
+
+    monkeypatch.setattr(loop.settings, "trace_tags", "bench, m , rep-1")
+    assert loop._trace_tags() == {"langfuse.trace.tags": ["bench", "m", "rep-1"],
+                                  "rigging.trace_tags": "bench,m,rep-1"}
+    monkeypatch.setattr(loop.settings, "trace_tags", "")
+    assert loop._trace_tags() == {}
 
 
 def test_a_run_that_did_not_end_ok_is_marked_failed():
@@ -111,6 +141,79 @@ def test_a_server_error_is_raised_not_swallowed():
         assert "runs/create failed" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("a 500 must surface; the loop is what swallows it")
+
+
+def test_validation_accepts_a_live_experiment():
+    calls, transport = _recorder()
+    MLflowExporter(transport=transport, experiment_id="1").validate()
+    path, _ = calls[0]
+    assert path == "/api/2.0/mlflow/experiments/get"
+
+
+def test_validation_rejects_an_experiment_that_does_not_exist():
+    """`runs/create` would fail mid-run, where the loop swallows it: fail first."""
+    import pytest
+
+    from rigging.errors import ExporterConfigError
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error_code": "RESOURCE_DOES_NOT_EXIST",
+                                         "message": "No Experiment with id=99 exists"})
+
+    exporter = MLflowExporter(transport=httpx.MockTransport(handler), experiment_id="99")
+    with pytest.raises(ExporterConfigError) as exc:
+        exporter.validate()
+    assert "no mlflow experiment with id '99'" in str(exc.value)
+    assert "experiments create" in str(exc.value), "the message says how to fix it"
+
+
+def test_validation_rejects_a_deleted_experiment():
+    """MLflow never reuses an id, so a re-created experiment is a *new* id."""
+    import pytest
+
+    from rigging.errors import ExporterConfigError
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"experiment": {
+            "experiment_id": "1", "name": "rigging-bench", "lifecycle_stage": "deleted"}})
+
+    exporter = MLflowExporter(transport=httpx.MockTransport(handler), experiment_id="1")
+    with pytest.raises(ExporterConfigError) as exc:
+        exporter.validate()
+    assert "is deleted" in str(exc.value) and "never reuses an id" in str(exc.value)
+
+
+def test_validation_reports_an_unreachable_server():
+    import pytest
+
+    from rigging.errors import ExporterConfigError
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused", request=request)
+
+    exporter = MLflowExporter(transport=httpx.MockTransport(handler),
+                              tracking_uri="http://127.0.0.1:9")
+    with pytest.raises(ExporterConfigError) as exc:
+        exporter.validate()
+    assert "unreachable at http://127.0.0.1:9" in str(exc.value)
+
+
+def test_the_registry_entry_validates_before_returning():
+    """`--export mlflow` and a manifest both resolve through this factory."""
+    import pytest
+
+    import rigging.observability as obs
+    from rigging.errors import ExporterConfigError
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error_code": "RESOURCE_DOES_NOT_EXIST"})
+
+    with pytest.raises(ExporterConfigError):
+        obs.mlflow_exporter(transport=httpx.MockTransport(handler), experiment_id="7")
+
+    _calls, transport = _recorder()
+    exporter = obs.mlflow_exporter(transport=transport, experiment_id="0")
+    assert isinstance(exporter, MLflowExporter)
 
 
 def test_a_manifest_selects_mlflow_through_the_registry(tmp_path, monkeypatch):

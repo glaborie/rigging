@@ -69,3 +69,52 @@ def test_each_rep_is_tagged_with_bench_model_and_pass() -> None:
     bench = _bench()
     assert bench.run_tags("opencode-go/deepseek-v4.1-flash", 0) == "bench,opencode-go/deepseek-v4.1-flash,rep-1"
     assert bench.run_tags("m", 4).endswith("rep-5")
+
+
+def test_the_run_name_is_a_utc_stamp() -> None:
+    assert _bench().run_stamp(0) == "1970-01-01T00-00-00Z"
+
+
+def test_an_existing_run_directory_is_never_reused(tmp_path) -> None:
+    """Rerunning a benchmark must not overwrite the first run's evidence."""
+    bench = _bench()
+    first = bench.fresh_dir(tmp_path, "smoke")
+    first.mkdir()
+    second = bench.fresh_dir(tmp_path, "smoke")
+    assert second.name == "smoke-2" and second != first
+
+
+def test_two_invocations_write_two_directories(tmp_path, capsys) -> None:
+    """The end-to-end version: same command twice, both result sets intact."""
+    bench = _bench()
+    args = [str(tmp_path / "eval.yaml"), "--models", "m", "--repeats", "2",
+            "--cmd", "echo refund PASS", "--no-export", "--quiet",
+            "--out", str(tmp_path / "out"), "--run-name", "smoke"]
+    assert bench.main(args) == 0
+    capsys.readouterr()
+    assert bench.main(args) == 0
+    err = capsys.readouterr().err
+
+    one = tmp_path / "out" / "smoke"
+    two = tmp_path / "out" / "smoke-2"
+    for run_dir in (one, two):
+        assert (run_dir / "raw" / "m-0.txt").read_text().strip() == "refund PASS"
+        assert (run_dir / "raw" / "m-1.txt").exists()
+        assert (run_dir / "table.md").exists() and (run_dir / "summary.json").exists()
+    assert "1/2" in err, "the rep counter is part of the progress output"
+    assert "results:" in err and str(two) in err
+
+
+def test_a_broken_mlflow_target_stops_the_benchmark_before_any_run(tmp_path, capsys, monkeypatch) -> None:
+    """85 runs that record nothing is worse than a refusal to start."""
+    bench = _bench()
+    monkeypatch.setattr(bench, "mlflow_problem",
+                        lambda: "mlflow experiment '1' (rigging-bench) is deleted")
+    out = tmp_path / "out"
+    rc = bench.main([str(tmp_path / "eval.yaml"), "--models", "m", "--repeats", "2",
+                     "--cmd", "echo refund PASS", "--export", "mlflow", "--out", str(out)])
+    err = capsys.readouterr().err
+    assert rc == 2, "a configuration error is an exit code, not a benchmark of zeroes"
+    assert "cannot record runs" in err and "is deleted" in err
+    assert not out.exists(), "nothing is written when the run cannot be exported"
+

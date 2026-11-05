@@ -26,6 +26,7 @@ import time
 from typing import Any
 
 from rigging.config import settings
+from rigging.errors import ExporterConfigError
 
 # Attributes that describe the whole trace. Langfuse reads them per observation
 # when filtering or aggregating (session views, tool filters), so they cannot
@@ -201,6 +202,54 @@ class MLflowExporter:
         body: dict[str, Any] = response.json() if response.content else {}
         return body
 
+    def _get(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        """A read against the tracking API: same client, same auth as `_post`."""
+        import httpx
+
+        if self._client is None:
+            headers = {"Authorization": f"Bearer {self._token}"} if self._token else {}
+            self._client = httpx.Client(base_url=self.tracking_uri, headers=headers,
+                                        timeout=self._timeout, transport=self._transport)
+        try:
+            response = self._client.get(path, params=params)
+        except Exception as exc:
+            raise ExporterConfigError(
+                f"mlflow tracking server unreachable at {self.tracking_uri}: {exc}") from exc
+        if response.status_code != 200:
+            raise ExporterConfigError(
+                f"mlflow {path} failed: status={response.status_code} body={response.text[:200]}"
+            )
+        body: dict[str, Any] = response.json() if response.content else {}
+        return body
+
+    def validate(self) -> None:
+        """Prove the configured experiment can receive runs — before spending any.
+
+        Called by the registry factory, i.e. at assembly time, so a wrong
+        `MLFLOW_EXPERIMENT_ID` fails the command instead of producing a benchmark
+        that records nothing: `runs/create` errors happen during the run, where
+        the loop swallows them on purpose. Kept out of `__init__` so the class
+        stays constructible offline (tests, tooling) and does no I/O on import.
+        """
+        try:
+            body = self._get("/api/2.0/mlflow/experiments/get",
+                             {"experiment_id": self.experiment_id})
+        except ExporterConfigError as exc:
+            if "status=404" not in str(exc):
+                raise
+            raise ExporterConfigError(
+                f"no mlflow experiment with id {self.experiment_id!r} on {self.tracking_uri}. "
+                "Create it first (`uvx mlflow experiments create --experiment-name <name>`) and "
+                "set MLFLOW_EXPERIMENT_ID to the id it prints") from exc
+        experiment = body.get("experiment") or {}
+        stage = str(experiment.get("lifecycle_stage") or "active")
+        if stage != "active":
+            raise ExporterConfigError(
+                f"mlflow experiment {self.experiment_id!r} ({experiment.get('name', '?')}) on "
+                f"{self.tracking_uri} is {stage}. MLflow never reuses an id, so a deleted and "
+                "re-created experiment has a new one: `uvx mlflow experiments search` lists the "
+                "ids, then update MLFLOW_EXPERIMENT_ID")
+
     # -------------------------------------------------------------- exporter
 
     def start_span(self, name: str, attributes: dict[str, Any]) -> Any:
@@ -211,6 +260,9 @@ class MLflowExporter:
                 {"key": "rigging.run_id", "value": str(attributes.get("rigging.run_id", ""))},
                 {"key": "gen_ai.agent.name", "value": str(attributes.get("gen_ai.agent.name", ""))},
                 {"key": "gen_ai.request.model", "value": str(attributes.get("gen_ai.request.model", ""))},
+                # RIGGING_TRACE_TAGS: what makes a benchmark rep findable here too
+                # (e.g. "bench,<model>,rep-3"), the same labels Langfuse receives.
+                {"key": "rigging.tags", "value": str(attributes.get("rigging.trace_tags", ""))},
             ]
             body = self._post("/api/2.0/mlflow/runs/create", {
                 "experiment_id": self.experiment_id,
@@ -274,8 +326,22 @@ class MLflowExporter:
             self._client = None
 
 
+def mlflow_exporter(**options: Any) -> MLflowExporter:
+    """Registry entry for `mlflow`: build the exporter, then prove the target exists.
+
+    Validation belongs here, not in `MLflowExporter.__init__`: the assembly step
+    is where a configuration error may legitimately abort the command, while the
+    running loop must never fail because of an exporter (ADR-0012). Every path
+    that names the exporter in a manifest or `--export` goes through this
+    factory, so none of them can quietly record nothing.
+    """
+    exporter = MLflowExporter(**options)
+    exporter.validate()
+    return exporter
+
+
 EXPORTERS: dict[str, Any] = {
     "console": ConsoleExporter,
     "langfuse": langfuse_exporter,
-    "mlflow": MLflowExporter,
+    "mlflow": mlflow_exporter,
 }

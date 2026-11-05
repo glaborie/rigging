@@ -5,8 +5,9 @@ replaces it with a stable placeholder (`[EMAIL_1]`) and puts the real value back
 into tool arguments, so the model can act on a customer without ever seeing them
 (ADR-0025). Both are deterministic, transform-only and never block.
 
-The sentinel map is per run, in memory, and never written to the log: the log
-stays a dead end without the process that produced it.
+The sentinel map is per session and never written to the log: the log stays a
+dead end. With `RIGGING_PII_KEY` set it is sealed into `SentinelVault` so a
+restart does not strand the next turn (ADR-0027); without a key it is memory-only.
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ import threading
 import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from rigging.protocols import Allow, Deny, Transform, Verdict
@@ -40,7 +42,7 @@ def _walk_strings(value: Any) -> Iterator[str]:
 
 @dataclass
 class SentinelMap:
-    """Bidirectional value <-> sentinel for one run. In memory only (ADR-0025).
+    """Bidirectional value <-> sentinel for one session. In memory, optionally vaulted.
 
     Stable within a run: the same value always maps to the same sentinel, so a
     tool result that repeats a customer's address does not mint `[EMAIL_2]`.
@@ -49,6 +51,8 @@ class SentinelMap:
     _to_sentinel: dict[str, str] = field(default_factory=dict)
     _to_value: dict[str, str] = field(default_factory=dict)
     _next: dict[str, int] = field(default_factory=dict)
+    #: Called after a new sentinel is minted; `SentinelStore` uses it to vault the map.
+    on_change: Any = field(default=None, repr=False, compare=False)
 
     def sentinelise(self, text: str) -> str:
         """Replace every detected PII span with its stable sentinel."""
@@ -71,7 +75,20 @@ class SentinelMap:
         sentinel = f"[{tag}_{number}]"
         self._to_sentinel[value] = sentinel
         self._to_value[sentinel] = value
+        if self.on_change is not None:
+            self.on_change()
         return sentinel
+
+    def to_dict(self) -> dict[str, Any]:
+        """The parts worth persisting: the pairs and the per-kind counters."""
+        return {"to_sentinel": dict(self._to_sentinel), "to_value": dict(self._to_value),
+                "next": dict(self._next)}
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> SentinelMap:
+        return cls(_to_sentinel=dict(data.get("to_sentinel") or {}),
+                   _to_value=dict(data.get("to_value") or {}),
+                   _next={k: int(v) for k, v in (data.get("next") or {}).items()})
 
     def deanonymise(self, text: str) -> str:
         """Put real values back. A sentinel the map never issued is left alone."""
@@ -103,18 +120,41 @@ class SentinelMap:
 
 @dataclass(eq=False)
 class SentinelStore:
-    """Session-scoped sentinel maps, in process memory only (ADR-0026).
+    """Session-scoped sentinel maps (ADR-0026, ADR-0027).
 
     The map has to outlive a run: a customer gives an address in one turn and
-    confirms the order in the next. It must still never be written anywhere, so
-    it lives here — one process, bounded, and forgotten on restart.
+    confirms the order in the next. It also has to outlive a *process* — a server
+    restart used to strand the next turn with an unresolvable placeholder — so
+    when a key is configured the map is sealed into `SentinelVault` on every new
+    sentinel. Without a key nothing is written and the old memory-only behaviour
+    stands; the store never writes plaintext either way.
     """
 
     ttl_s: float = 3600.0
     max_sessions: int = 256
+    vault: Any = None
     _maps: dict[str, SentinelMap] = field(default_factory=dict)
     _seen: dict[str, float] = field(default_factory=dict)
     _lock: threading.Lock = field(default_factory=threading.Lock)
+
+    @classmethod
+    def from_settings(cls) -> SentinelStore:
+        """Build the process store from `.env`: vaulted only when a key is present."""
+        from rigging.config import settings
+        from rigging.crypto import load_key
+        from rigging.errors import CryptoError
+        from rigging.vault import SentinelVault, _warn
+
+        store = cls(ttl_s=settings.pii_vault_ttl_s)
+        if not settings.pii_key.strip():
+            return store
+        try:
+            key = load_key(settings.pii_key)
+        except CryptoError as exc:
+            _warn(f"{exc}; sentinel maps stay in memory and are lost on restart")
+            return store
+        store.vault = SentinelVault(Path(settings.pii_vault_dir or "runs/pii-vault"), key)
+        return store
 
     def get(self, session_id: str, *, now: float | None = None) -> SentinelMap:
         with self._lock:
@@ -122,20 +162,29 @@ class SentinelStore:
             self._prune(at)
             sentinels = self._maps.get(session_id)
             if sentinels is None:
-                sentinels = self._maps[session_id] = SentinelMap()
+                sentinels = self._restore(session_id)
+                sentinels.on_change = lambda: self._save(session_id, sentinels)
+                self._maps[session_id] = sentinels
             self._seen[session_id] = at
             self._trim()
             return sentinels
 
     def forget(self, session_id: str) -> None:
         with self._lock:
-            self._maps.pop(session_id, None)
+            replaced = self._maps.pop(session_id, None)
             self._seen.pop(session_id, None)
+            if self.vault is not None:
+                self.vault.forget(session_id)
+            del replaced
 
     def clear(self) -> None:
         with self._lock:
+            sessions = list(self._maps)
             self._maps.clear()
             self._seen.clear()
+            if self.vault is not None:
+                for session_id in sessions:
+                    self.vault.forget(session_id)
 
     def __len__(self) -> int:
         with self._lock:
@@ -145,20 +194,44 @@ class SentinelStore:
         with self._lock:
             return session_id in self._maps
 
+    def _restore(self, session_id: str) -> SentinelMap:
+        """The vaulted map for this session, or an empty one."""
+        if self.vault is None:
+            return SentinelMap()
+        payload = self.vault.load(session_id)
+        if payload is None:
+            return SentinelMap()
+        saved_at = float(payload.get("saved_at") or 0.0)
+        if time.time() - saved_at > self.ttl_s:
+            self.vault.forget(session_id)
+            return SentinelMap()
+        return SentinelMap.from_dict(payload)
+
+    def _save(self, session_id: str, sentinels: SentinelMap) -> None:
+        if self.vault is None:
+            return
+        self.vault.save(session_id, sentinels.to_dict())
+
     def _prune(self, at: float) -> None:
         for session_id in [s for s, seen in self._seen.items() if at - seen > self.ttl_s]:
             self._maps.pop(session_id, None)
             self._seen.pop(session_id, None)
+            if self.vault is not None:
+                self.vault.forget(session_id)
+        if self.vault is not None:
+            self.vault.prune(self.ttl_s)
 
     def _trim(self) -> None:
         while len(self._maps) > self.max_sessions:
             oldest = min(self._seen, key=lambda session: self._seen[session])
             self._maps.pop(oldest, None)
             self._seen.pop(oldest, None)
+            if self.vault is not None:
+                self.vault.forget(oldest)
 
 
 #: The process's store. Tests build their own; the loop resolves this one.
-DEFAULT_SENTINEL_STORE = SentinelStore()
+DEFAULT_SENTINEL_STORE = SentinelStore.from_settings()
 
 
 class PIIRedactionGuardrail:

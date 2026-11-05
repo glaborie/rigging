@@ -1,0 +1,30 @@
+# LibreChat -> rigging (ADR-0028). Mount this at /app/librechat.yaml, or use the
+# `librechat` compose profile. One custom endpoint, one agent.
+#
+# The model id is the *agent's name*, not the manifest's model. The harness
+# advertises it at GET /v1/models; the underlying model is the manifest's choice.
+version: 1.3.18
+cache: true
+
+endpoints:
+  custom:
+    - name: 'rigging'
+      # Same shared secret as `harness serve --openai-api`; LibreChat sends it as
+      # `Authorization: Bearer ...`.
+      apiKey: '${RIGGING_SERVICE_TOKEN}'
+      # LibreChat appends /chat/completions, so the base URL ends at /v1.
+      # Inside the compose network the harness is on the Docker host.
+      baseURL: '${RIGGING_LIBRECHAT_BASE_URL}'
+      models:
+        default: ['b2b-support']
+        # GET /v1/models returns the agent's name, so the picker stays in sync
+        # when the manifest changes models.
+        fetch: true
+      # A title request is a second model call with no user message; this server
+      # answers it with a 400 and would log a run for it. Keep titles off.
+      titleConvo: false
+      modelDisplayLabel: 'rigging'
+      headers:
+        # The sentinel vault is per session (ADR-0026/0027). This is what makes
+        # turn 2 resolve the [EMAIL_1] that turn 1 left in the conversation.
+        X-Conversation-Id: '{{LIBRECHAT_BODY_CONVERSATIONID}}'

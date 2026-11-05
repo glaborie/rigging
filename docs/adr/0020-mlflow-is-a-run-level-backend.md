@@ -55,3 +55,29 @@ dashboard can read either backend.
 - **MLflow 3 trace ingestion (OTLP)**: closer in spirit, but the ingestion
   contract is younger than the tracking API and would tie us to one MLflow major
   version.
+
+## Postscript: the target is validated at assembly (2026-11-05)
+
+The run-level mapping above has a failure mode the rest of the design hides. The
+loop swallows exporter errors by design (ADR-0012), so if `MLFLOW_EXPERIMENT_ID`
+names an experiment that does not exist — or a *deleted* one, which is easy: MLflow
+never reuses an id, so deleting and re-creating an experiment leaves the old id in
+`.env` — then `runs/create` returns `RESOURCE_DOES_NOT_EXIST` mid-run, nobody sees
+it, and a 85-run benchmark reports `ok` with nothing recorded.
+
+"Exporter errors never fail a run" is a rule about the run, not about startup. The
+registry entry for `mlflow` is therefore a factory (`mlflow_exporter`) that resolves
+the experiment (`GET /api/2.0/mlflow/experiments/get`) and raises
+`ExporterConfigError` if it is missing, deleted or the server is unreachable. The
+loop assembles exporters before the first model call, so the command exits 2 with
+one actionable line. `MLflowExporter.__init__` stays I/O-free so the class remains
+constructible offline in tests.
+
+Cost: one extra HTTP GET per run in an eval suite (17 cases = 17 GETs against the
+tracking server), and `--export mlflow` now refuses to start when the backend is
+down instead of running bare. That is the intended trade: a benchmark that cannot
+export is a configuration error, not a degraded success.
+
+Rejected: creating the experiment on demand. A benchmark should write to a target
+a human chose, not invent one, and a typo'd id would then silently create
+`experiment-1` beside the real one.

@@ -4,6 +4,9 @@
 
 **Supersedes:** the one-run scope in ADR-0025.
 
+**Amended by:** ADR-0027 — the map may now be sealed to disk (`SentinelVault`)
+when `RIGGING_PII_KEY` is set, so a restart no longer strands the next turn.
+
 ## Context
 
 ADR-0025 scoped the `[EMAIL_1]` map to a single run, because a run is the unit

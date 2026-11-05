@@ -119,14 +119,32 @@ def _generation_output(response: ModelResponse) -> Any:
 
 
 def _trace_tags() -> dict[str, Any]:
-    """`RIGGING_TRACE_TAGS` → Langfuse trace tags, for filtering a run in the UI.
+    """`RIGGING_TRACE_TAGS` → trace tags, for filtering a run in the UI.
 
     Tags are labels, not content: they are not gated by `capture_content`.
     Langfuse reads `langfuse.trace.tags` (string[]) on any span of the trace;
-    setting it on the root keeps it to one place.
+    setting it on the root keeps it to one place. `rigging.trace_tags` carries
+    the same comma-joined value for exporters that tag string-to-string (MLflow).
     """
     tags = [t.strip() for t in settings.trace_tags.split(",") if t.strip()]
-    return {"langfuse.trace.tags": tags} if tags else {}
+    if not tags:
+        return {}
+    return {"langfuse.trace.tags": tags, "rigging.trace_tags": ",".join(tags)}
+
+
+def _trace_name() -> dict[str, Any]:
+    """`RIGGING_TRACE_NAME` → the trace's name in Langfuse.
+
+    Langfuse falls back to the root span's name, which is `invoke_agent` for every
+    run in this harness. A batch needs more than that to be readable: `bench.py`
+    leaves it unset (tags carry the model and repeat) and the red-team provider
+    sets it per probe, so a scan is a list of probes rather than a list of
+    identical rows.
+    """
+    name = settings.trace_name.strip()
+    if not name:
+        return {}
+    return {"langfuse.trace.name": name}
 
 
 def _tool_attributes(tools: set[str]) -> dict[str, Any]:
@@ -484,6 +502,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         "rigging.spec_hash": spec.spec_hash,
         **({"rigging.parent_run_id": parent_run_id} if parent_run_id else {}),
         **_trace_tags(),
+        **_trace_name(),
         **_content(spec, input_value=user_content, trace=True),
     })
     last: ModelResponse | None = None

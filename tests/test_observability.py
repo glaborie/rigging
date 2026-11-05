@@ -348,6 +348,36 @@ def test_bench_tags_reach_the_root_span(tmp_path, monkeypatch):
     assert attributes["langfuse.trace.tags"] == ["bench", "opencode-go/deepseek-v4.1-flash", "rep-2"]
 
 
+def test_trace_name_reaches_the_root_span(tmp_path, monkeypatch):
+    """Langfuse names a trace after its root span; every run here is
+    `invoke_agent`, so a scan needs the name spelled out per probe."""
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_name", "redteam policy#4")
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    assert exporter.spans[0][1]["langfuse.trace.name"] == "redteam policy#4"
+
+
+def test_no_trace_name_attribute_when_it_is_unset(tmp_path, monkeypatch):
+    import rigging.loop as loop
+
+    exporter = RecordingExporter()
+    _patched_exporters(monkeypatch, exporter)
+    monkeypatch.setattr(loop.settings, "trace_name", "")
+    spec = _spec(tmp_path, observability={"exporters": ["console"]})
+
+    run_agent(spec, "hi", log=EventLog(tmp_path / "t.db"),
+              client=FakeClient([{"role": "assistant", "content": "ok"}]))
+
+    assert "langfuse.trace.name" not in exporter.spans[0][1]
+
+
 def test_no_tag_attribute_when_the_variable_is_unset(tmp_path, monkeypatch):
     import rigging.loop as loop
 

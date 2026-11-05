@@ -81,10 +81,19 @@ class Settings(BaseSettings):
     # run can be filtered in the UI. `scripts/bench.py` sets this per model and
     # repeat; nothing else needs it.
     trace_tags: str = Field(default="", validation_alias="RIGGING_TRACE_TAGS")
+    # The trace's name in Langfuse (`langfuse.trace.name`). Without it every run
+    # shares the root span's name, so a scan of 33 probes is 33 rows called
+    # `invoke_agent`. `redteam/provider.py` sets this per probe.
+    trace_name: str = Field(default="", validation_alias="RIGGING_TRACE_NAME")
     # MLflow exporter (ADR-0020): the tracking server is HTTP, so no SDK is needed.
     mlflow_tracking_uri: str = Field(default="", validation_alias="MLFLOW_TRACKING_URI")
     mlflow_experiment_id: str = Field(default="0", validation_alias="MLFLOW_EXPERIMENT_ID")
     mlflow_tracking_token: str = Field(default="", validation_alias="MLFLOW_TRACKING_TOKEN")
+    # PII at rest (ADR-0027). Empty key = sentinel maps stay in memory and tool
+    # rows are plaintext; a key seals both and is never written anywhere itself.
+    pii_key: str = Field(default="", validation_alias="RIGGING_PII_KEY")
+    pii_vault_dir: str = Field(default="", validation_alias="RIGGING_PII_VAULT_DIR")
+    pii_vault_ttl_s: float = Field(default=3600.0, validation_alias="RIGGING_PII_VAULT_TTL_S")
 
     def profile(self, name: str = "default") -> Profile:
         """Named profiles come from RIGGING_PROFILE_<NAME>_BASE_URL / _API_KEY.

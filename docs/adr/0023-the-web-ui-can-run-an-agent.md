@@ -1,7 +1,10 @@
 # ADR-0023: The web UI can run an agent, with approvals in the page
 
 **Status:** Accepted. Supersedes the "write-capable web UI" clause of ADR-0017 and
-the "no endpoint that writes, launches or approves" clause of ADR-0018.
+the "no endpoint that writes, launches or approves" clause of ADR-0018. Partly
+superseded by ADR-0028: its "OpenWebUI / AnythingLLM / LibreChat" rejection is
+reversed for an opt-in OpenAI-compatible front door. The page and its approval
+channel remain the only place a human answers a side-effecting tool.
 
 ## Context
 
@@ -16,6 +19,10 @@ OpenAI-compatible *clients*, and rigging is a client of such endpoints, not a
 server that exposes `/v1/chat/completions`. Pointing them at the gateway chats
 with a raw model: no tools, no guardrails, no approvals, no event log. The only
 honest way to demo the harness is a page that starts a harness run.
+
+That last sentence is what ADR-0028 revisits: the surface exists now, opt-in, and
+the approval argument below is why it denies side effects instead of pretending to
+ask.
 
 Two constraints survive from ADR-0018 and are not negotiable:
 
@@ -73,6 +80,9 @@ secret, not an identity.
 - **OpenWebUI / AnythingLLM / LibreChat**: they speak OpenAI's chat-completions
   protocol to a server. rigging is not a server, and approvals need a channel
   those clients do not have. Wiring them up would demo a model, not the harness.
+  Revisited in ADR-0028: the protocol is served behind `--openai-api` now, with
+  side effects denied because that channel is still missing. This page remains the
+  only surface that shows an approval as a decision.
 - **Running the loop in the browser**: a second implementation of the thing this
   repository exists to demonstrate.
 - **WebSocket for approvals**: SSE down plus a plain POST up is smaller, and the

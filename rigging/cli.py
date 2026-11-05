@@ -16,8 +16,10 @@ from typing import Any
 
 from rigging import __version__
 from rigging.config import settings
+from rigging.errors import RiggingError
 from rigging.events import EventLog
 from rigging.manifest import AgentSpec, load_manifest
+from rigging.pii_store import SEALED_COLUMNS
 from rigging.registry import DEFAULT_REGISTRY
 
 
@@ -78,6 +80,8 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("--export", action="append", default=None,
                     help="override the manifest exporters (repeatable, e.g. --export langfuse)")
     ev.add_argument("--json", action="store_true")
+    ev.add_argument("--no-progress", action="store_true",
+                    help="no per-case progress lines on stderr")
 
     idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
     idx.add_argument("manifest")
@@ -108,10 +112,17 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--model", default=None, help="override the manifest's model (chat)")
     serve.add_argument("--profile", default=None,
                        help="override the manifest credential_profile (chat)")
+    serve.add_argument("--openai-api", action="store_true",
+                       help="also serve /v1/models and /v1/chat/completions for a chat UI "
+                            "such as LibreChat (needs --manifest and a token; no approvals "
+                            "in that UI, side-effecting tools are denied — ADR-0028)")
     serve.add_argument("--export", action="append", default=None, metavar="NAME",
                        help="override the manifest exporters (chat; repeatable, e.g. langfuse)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("-v", "--verbose", action="store_true",
+                       help="log every HTTP request on stdout (uvicorn access log: "
+                            "client, method, path, status)")
     serve.add_argument("--ssl-certfile", default=None,
                        help="TLS certificate (PEM); with --ssl-keyfile serves https")
     serve.add_argument("--ssl-keyfile", default=None,
@@ -119,6 +130,17 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--trusted-proxies", default=None,
                        help="comma-separated peers allowed to set X-Forwarded-For "
                             "(default: 127.0.0.1,::1; never '*')")
+
+    # Reading sealed PII back is a command, not a script: it is a routine
+    # diagnostic. Sealing stays in scripts/seal_pii.py, because a migration that
+    # cannot be undone should not be one keystroke away from `--help`.
+    pii = sub.add_parser("pii", help="read the PII a tool stored (ADR-0027)")
+    pii_sub = pii.add_subparsers(dest="pii_command", required=True)
+    pii_open = pii_sub.add_parser("open", help="print the plaintext behind a sealed contact")
+    pii_open.add_argument("db", help="SQLite file (e.g. examples/b2b-support/demo.db)")
+    pii_open.add_argument("--table", choices=[spec.table for spec in SEALED_COLUMNS],
+                          default=None, help="only this table (default: all of them)")
+    pii_open.add_argument("--limit", type=int, default=None, help="stop after N values")
 
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
@@ -191,7 +213,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
     from rigging.eval import render, run_suite
 
     results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only,
-                               exporters=args.export, profile=args.profile)
+                               exporters=args.export, profile=args.profile,
+                               progress=not args.no_progress)
     if args.json:
         print(json.dumps({"suite": suite.get("name"), "results": [r.__dict__ for r in results]},
                          indent=2, default=str))
@@ -290,6 +313,44 @@ def cmd_escalations(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pii(args: argparse.Namespace) -> int:
+    return cmd_pii_open(args)
+
+
+def cmd_pii_open(args: argparse.Namespace) -> int:
+    """`harness pii open <db>`: the plaintext behind what a tool wrote down.
+
+    Read-only, and it prints what the *file* holds next to what that opens to, so
+    a plaintext legacy row and a value sealed with another key look different
+    instead of both looking like "a contact".
+    """
+    from rigging.crypto import load_key
+    from rigging.pii_store import open_contacts
+
+    db = pathlib.Path(args.db)
+    if not db.exists():
+        print(f"no database at {db}", file=sys.stderr)
+        return 2
+    if not settings.pii_key.strip():
+        print("RIGGING_PII_KEY is empty: there is no key to open a sealed value with. "
+              "Set it in the environment or .env (see .env.example).", file=sys.stderr)
+        return 2
+    records = open_contacts(db, load_key(settings.pii_key), table=args.table,
+                            limit=None if args.limit is None else max(0, args.limit))
+    if not records:
+        print("no stored contacts in this database", file=sys.stderr)
+        return 0
+    print(f"{'column':<24} {'row':<12} {'state':<11} value")
+    for record in records:
+        value = record.value
+        if value is None:
+            value = "(cannot open: wrong key, or the ciphertext was altered)"
+        print(f"{record.column.name:<24} {record.row:<12} {record.state:<11} {value}")
+    sealed = sum(1 for record in records if record.sealed)
+    print(f"\n{len(records)} contact(s): {sealed} sealed, {len(records) - sealed} plaintext")
+    return 0
+
+
 def cmd_schema(_args: argparse.Namespace) -> int:
     from rigging.manifest import SCHEMA_PATH
 
@@ -354,6 +415,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
                   "for the read-only view.", file=sys.stderr)
             return 2
         runner = ChatRunner(spec, db)
+    bridge = None
+    if args.openai_api:
+        if runner is None:
+            print("--openai-api serves an agent: it needs --manifest (and the same "
+                  "RIGGING_SERVICE_TOKEN as chat).", file=sys.stderr)
+            return 2
+        from rigging.service.openai_api import OpenAIBridge
+
+        bridge = OpenAIBridge(runner.spec, db)
     if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
         print("--ssl-certfile and --ssl-keyfile go together", file=sys.stderr)
         return 2
@@ -370,10 +440,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
     scheme = "https" if tls else "http"
     mode = "chat + runs" if runner is not None else "read-only"
+    if bridge is not None:
+        mode += " + /v1"
     print(f"rigging runs: {scheme}://{args.host}:{args.port}  ({mode}, db={db})")
     if runner is not None:
         print(f"agent: {runner.spec.name} · {runner.spec.model} "
               f"(profile {runner.spec.credential_profile or 'default'})")
+    if bridge is not None:
+        print(f"openai api: /v1/models + /v1/chat/completions for {bridge.model_id!r} "
+              "(requires X-Conversation-Id)")
+        print("approvals: none in this UI — side-effecting tools are denied (ADR-0028)")
     print(f"auth: {'bearer token' if tokens else 'none — loopback only (ADR-0021)'}")
     print("rate limit: "
           + (f"{settings.service_rate_limit}/min per client"
@@ -381,14 +457,19 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print("proxy trust: configured (X-Forwarded-For sets the rate-limit key)"
           if trusted.strip() else
           "proxy trust: off — every client shares the socket peer's bucket")
+    if args.verbose:
+        print("access log: on — one line per request on stdout (SSE connections log "
+              "on connect, not per event)")
     uvicorn.run(
         create_app(db, tokens=tokens,
                    rate_limit_per_minute=settings.service_rate_limit,
-                   runner=runner),
+                   runner=runner, bridge=bridge),
         host=args.host, port=args.port,
         ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
         proxy_headers=True, forwarded_allow_ips=trusted,
-        log_level="warning",
+        # uvicorn's "access" logger writes to stdout; its level follows log_level,
+        # so this one switch is the whole feature. Warning keeps the page quiet.
+        log_level="info" if args.verbose else "warning",
     )
     return 0
 
@@ -428,12 +509,19 @@ HANDLERS = {
     "eval": cmd_eval,
     "calibrate": cmd_calibrate,
     "serve": cmd_serve,
+    "pii": cmd_pii,
 }
 
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return HANDLERS[args.command](args)
+    try:
+        return HANDLERS[args.command](args)
+    except RiggingError as exc:
+        # Configuration errors (unknown capability, unreachable exporter target)
+        # are the caller's problem, not a crash: one line, exit 2, no traceback.
+        print(f"harness {args.command}: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

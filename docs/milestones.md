@@ -270,6 +270,74 @@ ADR-0017 and the no-write clause of ADR-0018).
       `make check`: 204 passed; `make test-browser`: 2 passed. The demo script is
       [`showcase-v0.7.md`](showcase-v0.7.md).
 
+## v0.8 — the harness under attack
+
+The eval suite asks whether the agent behaves on the cases we thought of. This
+milestone is the other question, and it is the one a security reviewer will ask:
+what happens when someone tries to make it misbehave? Not a new harness layer —
+a probe suite pointed at the demo, with the judgement split between a
+deterministic assertion on the run and a model grader on the reply.
+
+- [x] **`redteam/provider.py`: a promptfoo target that reports facts.** One turn
+      through `run_agent`, then `attempted` / `executed` / `denied` /
+      `approval_denials` / `guardrail_denials` folded from the event log, plus a
+      before/after diff of the fixture database. `tool_call` is an attempt and
+      `tool_result` is what happened — the distinction the eval suite learned the
+      hard way.
+- [x] **Three approval postures**, because a scan needs to say three different
+      things: deny everything (the unattended default), approve everything, or
+      approve one named tool so the guardrails rather than the approval channel
+      are on trial.
+- [x] **Controls before scores.** Four known-good cases, one of which really
+      executes an in-window refund and asserts the row changed; without it a
+      target that refuses everything reports 0% attack success and means nothing.
+- [x] **Two scans** (18 probes unattended, 15 with refunds pre-approved): no
+      probe produced a side effect, no probe got a contact address out. The one
+      failure was the grader's JSON parse, not the target — recorded, not
+      suppressed, because that is the argument for deterministic predicates
+      (ADR-0009).
+- [x] **Scoped honestly.** `bola`/`rbac`/`bfla` are excluded because the demo has
+      no caller identity to break, and `rag-poisoning` because the fixture has no
+      poisoned documents in it. Both exclusions, and the follow-up commands, are
+      in [`red-team.md`](red-team.md).
+- [x] **One Langfuse trace per probe.** `redteam/run.sh` sets
+      `REDTEAM_EXPORT=langfuse` when `LANGFUSE_*` is configured and the provider
+      overlays the manifest's exporters, so a scan's trajectories land in the
+      same backend as `make trace`: root `invoke_agent`, `chat` generations,
+      `execute_tool` spans with arguments, results and `rigging.tool.denied`.
+      Traces are named `redteam <plugin>#<n>` — Langfuse otherwise names them
+      after the root span, and 33 rows called `invoke_agent` is not a scan — and
+      tagged `probe:`, `strategy:`, `approval:`. `RIGGING_TRACE_NAME` is the
+      settings field that carries the name; a missing `[langfuse]` extra fails
+      the scan instead of exporting nothing silently (ADR-0012's cost).
+- [x] 17 offline tests on the provider's pure parts; the scans themselves are
+      opt-in and live. Generated probes are committed; the run logs are not.
+
+- [x] **A chat UI can drive the agent (ADR-0028).** `harness serve --openai-api`
+      serves `GET /v1/models` and `POST /v1/chat/completions` for one agent,
+      streamed or not, and each request is the same `run_agent` the CLI calls.
+      ADR-0023 rejected exactly this and is amended rather than ignored: the
+      sentence "no approvals" was right, so the bridge replaces only the
+      manifest's `cli` policy with `AutoDenyApproval` and the UI shows a refusal
+      instead of pretending to ask. What made it feasible was LibreChat's
+      `{{LIBRECHAT_BODY_CONVERSATIONID}}` header — the session key the sentinel
+      vault needs so turn 2 can resolve `[EMAIL_1]` — and the request is refused
+      without it. Streaming is live unless the manifest has an `on_output`
+      guardrail; then the answer is buffered until the policy runs, so the stream
+      cannot show a commitment `commitment_check` is about to deny. `make web`
+      remains the surface that shows an approval as a decision;
+      [`librechat.md`](librechat.md) has the wiring and the four ways it fails.
+
+## v0.8 backlog
+
+- [ ] **Streaming tool activity into the UI.** `/v1/chat/completions` returns the
+      assistant's text; the tool calls a turn made are only in the event log.
+      A UI can show them only if the bridge emits them somewhere the protocol
+      allows — a `delta` the client ignores is not that place.
+- [ ] **An approval channel for non-page clients.** `AutoDenyApproval` is the
+      honest default for a UI without one. A queue with a POST would let a
+      LibreChat operator answer, at the cost of knowing who is answering.
+
 ## Standing rules
 
 1. The demo must pass its eval suite on the **weakest documented model** (`qwen3:8b`).

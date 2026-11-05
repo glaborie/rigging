@@ -73,3 +73,19 @@ The MLflow run is `FINISHED` on `ok`, `FAILED` on a denied or exhausted run.
 
 Same shape as `mlflow/`, with `exporters: [langfuse]` over OTLP. `make trace` is
 the one command that runs it and reads the spans back.
+
+## `librechat/` — a chat UI for one agent (v0.8)
+
+`librechat.yaml` points LibreChat's custom OpenAI endpoint at
+`harness serve --openai-api`. The header template
+`{{LIBRECHAT_BODY_CONVERSATIONID}}` is the session key; without it the request is
+refused. Side-effecting tools are denied because LibreChat has no approval
+channel (ADR-0028).
+
+```bash
+RIGGING_SERVICE_TOKEN=demo make openai   # terminal 1: /v1 on :8000
+make librechat                            # terminal 2: http://localhost:3080
+```
+
+The full walkthrough, including the plain-HTTP bind warning and the failure
+table, is [`docs/librechat.md`](../docs/librechat.md).

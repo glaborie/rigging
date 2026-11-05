@@ -40,6 +40,34 @@ def test_index_serves_the_page(tmp_path):
     assert "read-only view of the event log" in body
 
 
+def test_health_is_public_and_carries_no_run_data(tmp_path):
+    """Probes (IDE previews, docker, a proxy) need an answer without a token."""
+    log, run_id = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, tokens=["t"]))
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    assert run_id not in response.text, "a probe must not learn anything about runs"
+
+
+def test_health_is_not_rate_limited(tmp_path):
+    """A throttled probe reads as an outage, so /health skips the limiter."""
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path, rate_limit_per_minute=1))
+    assert client.get("/health").status_code == 200
+    assert client.get("/health").status_code == 200
+
+
+def test_health_reports_a_log_that_disappeared(tmp_path):
+    """The view cannot serve what it cannot read; say so instead of 200."""
+    log, _ = _finished_run(tmp_path)
+    client = TestClient(create_app(log.path))
+    log.path.unlink()
+    response = client.get("/health")
+    assert response.status_code == 503
+    assert response.json() == {"status": "unavailable"}
+
+
 def test_index_javascript_keeps_its_escaped_newlines():
     """A Python `\n` in a non-raw string becomes a real newline in the served JS.
 
@@ -124,8 +152,8 @@ def test_the_service_never_writes(tmp_path):
     log, run_id = _finished_run(tmp_path)
     app = create_app(log.path)
     assert {route.path for route in app.routes if hasattr(route, "methods")} == {
-        "/", "/api/runs", "/api/escalations", "/api/config", "/api/runs/{run_id}",
-        "/api/sessions/{session_id}", "/api/runs/{run_id}/stream",
+        "/", "/health", "/api/runs", "/api/escalations", "/api/config",
+        "/api/runs/{run_id}", "/api/sessions/{session_id}", "/api/runs/{run_id}/stream",
     }
     assert all(route.methods == {"GET"} for route in app.routes if hasattr(route, "methods"))
     before = (tmp_path / "runs.db").read_bytes()
