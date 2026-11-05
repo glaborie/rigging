@@ -78,6 +78,8 @@ def _parser() -> argparse.ArgumentParser:
     ev.add_argument("--export", action="append", default=None,
                     help="override the manifest exporters (repeatable, e.g. --export langfuse)")
     ev.add_argument("--json", action="store_true")
+    ev.add_argument("--no-progress", action="store_true",
+                    help="no per-case progress lines on stderr")
 
     idx = sub.add_parser("index", help="(re)build the manifest's retrieval index")
     idx.add_argument("manifest")
@@ -191,7 +193,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
     from rigging.eval import render, run_suite
 
     results, suite = run_suite(args.suite, db=args.db, model=args.model, only=args.only,
-                               exporters=args.export, profile=args.profile)
+                               exporters=args.export, profile=args.profile,
+                               progress=not args.no_progress)
     if args.json:
         print(json.dumps({"suite": suite.get("name"), "results": [r.__dict__ for r in results]},
                          indent=2, default=str))

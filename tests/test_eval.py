@@ -32,6 +32,49 @@ def test_profile_override_picks_the_gateway():
     assert _with_profile(spec, None).credential_profile == "openrouter"
 
 
+def _canned_suite(tmp_path, monkeypatch, ids_and_verdicts):
+    """A suite that runs no model: `run_case` is replaced with canned verdicts."""
+    import rigging.eval as ev
+
+    suite = tmp_path / "eval.yaml"
+    cases = "".join(f"  - {{id: {case}, prompt: 'x'}}\n" for case, _ in ids_and_verdicts)
+    suite.write_text(f"name: canned\nmanifest: agent.yaml\ncases:\n{cases}")
+
+    monkeypatch.setattr(ev, "load_manifest", lambda *_a, **_k: object())
+    verdicts = iter(ids_and_verdicts)
+
+    def fake_run_case(case, spec, **_kwargs):
+        case_id, passed = next(verdicts)
+        return ev.CaseResult(id=case_id, passed=passed, latency_s=1.5)
+
+    monkeypatch.setattr(ev, "run_case", fake_run_case)
+    return suite
+
+
+def test_suite_progress_is_one_stderr_line_per_case(tmp_path, monkeypatch, capsys):
+    """A 14-case suite must not look hung: each verdict is printed as it lands."""
+    import rigging.eval as ev
+
+    suite = _canned_suite(tmp_path, monkeypatch, [("first", True), ("second", False)])
+    results, _ = ev.run_suite(suite, db=tmp_path / "e.db", progress=True)
+
+    err = capsys.readouterr().err
+    assert "[1/2] first" in err and "PASS" in err.splitlines()[0]
+    assert "[2/2] second" in err and "FAIL" in err.splitlines()[1]
+    assert [r.passed for r in results] == [True, False]
+    assert capsys.readouterr().out == "", "stdout stays the table, not progress"
+
+
+def test_suite_progress_is_off_unless_asked(tmp_path, monkeypatch, capsys):
+    """The library default writes nothing: only the CLI opts in."""
+    import rigging.eval as ev
+
+    suite = _canned_suite(tmp_path, monkeypatch, [("only", True)])
+    ev.run_suite(suite, db=tmp_path / "e.db")
+    assert capsys.readouterr().err == ""
+
+
+
 def test_run_case_records_the_verdict_as_an_event(tmp_path, monkeypatch):
     """The verdict is joined later by run_id, so it must live in the log."""
     import types
