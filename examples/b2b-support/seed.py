@@ -61,6 +61,27 @@ CONTACTS = [
 ]
 
 
+def _seal_contact(order_id: str, contact: str) -> str:
+    """Seal a seeded contact when `RIGGING_PII_KEY` is set (ADR-0027).
+
+    The fixture is synthetic, but a database that ships plaintext contacts
+    contradicts the claim the harness makes, and an operator's own seed data is
+    not synthetic. Without a key the value is stored as-is, so `make seed` keeps
+    working with no setup; with one, the bytes stop being deterministic while the
+    data does not.
+    """
+    from rigging.config import settings
+    from rigging.crypto import CryptoError, load_key, seal
+
+    if not settings.pii_key.strip():
+        return contact
+    try:
+        key = load_key(settings.pii_key)
+    except CryptoError:
+        return contact
+    return seal(contact, key, aad=f"orders.contact:{order_id}")
+
+
 def _money(x: float) -> float:
     return round(x, 2)
 
@@ -102,7 +123,8 @@ def build_db(out: Path, seed: int = 7) -> dict[str, int]:
         status = STATUSES[i % len(STATUSES)]
         delivered = f"2026-{(i % 9) + 1:02d}-{(i % 27) + 1:02d}" if status == "delivered" else None
         orders.append((f"ORD-{1001 + i}", p[0], qty, _money(p[2] * tier), status, delivered,
-                       ORDER_NOTES[i % len(ORDER_NOTES)], CONTACTS[i % len(CONTACTS)]))
+                       ORDER_NOTES[i % len(ORDER_NOTES)],
+                       _seal_contact(f"ORD-{1001 + i}", CONTACTS[i % len(CONTACTS)])))
     # ORD-1002 is deliberately fresh and sealed/unopened: the demo prompt "refund
     # ORD-1002" must reach the approval gate, not die in the 30-day window check.
     orders[1] = (orders[1][0], orders[1][1], orders[1][2], orders[1][3],

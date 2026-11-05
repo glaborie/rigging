@@ -17,6 +17,7 @@ from contextlib import closing
 from pathlib import Path
 from typing import Any
 
+from rigging.pii_store import NOTIFICATIONS_CONTACT, ORDERS_CONTACT
 from rigging.registry import DEFAULT_REGISTRY, tool
 from rigging.types import RunContext
 
@@ -123,6 +124,44 @@ def _ensure_multiline_orders(db: sqlite3.Connection) -> None:
 
 def _now() -> str:
     return _dt.datetime.now(_dt.UTC).isoformat(timespec="seconds")
+
+
+def _pii_key() -> bytes | None:
+    """The sealing key, when one is configured (ADR-0027). None = plaintext storage."""
+    from rigging.config import settings
+    from rigging.crypto import load_key
+    from rigging.errors import CryptoError
+
+    if not settings.pii_key.strip():
+        return None
+    try:
+        return load_key(settings.pii_key)
+    except CryptoError:
+        return None  # load_key's message already reached stderr via the store's warning
+
+
+def _seal_contact(contact: str | None, *, aad: str) -> str | None:
+    """Seal a contact before it is written, so the row is ciphertext at rest."""
+    key = _pii_key()
+    if contact is None or key is None:
+        return contact
+    from rigging.crypto import seal
+
+    return seal(contact, key, aad=aad)
+
+
+def _open_contact(contact: str | None, *, aad: str) -> str | None:
+    """Open a sealed contact on read; a plaintext row (old seed, no key) passes through."""
+    key = _pii_key()
+    if contact is None or key is None:
+        return contact
+    from rigging.crypto import open_sealed
+    from rigging.errors import CryptoError
+
+    try:
+        return open_sealed(contact, key, aad=aad)
+    except CryptoError:
+        return None  # unreadable with this key: a missing contact, never a crash
 
 
 def _line(db: sqlite3.Connection, sku: str, qty: int) -> dict[str, Any]:
@@ -259,12 +298,13 @@ def submit_basket(ctx: RunContext, contact: str = "") -> str:
                     + ". Fix the lines with update_basket_item, then submit again.")
 
         order_id = _next_order_id(db)
+        sealed_contact = _seal_contact(contact or None, aad=ORDERS_CONTACT.aad_for(order_id))
         try:
             db.executemany(
                 "INSERT INTO orders(order_id, sku, qty, unit_price, status, delivered_at, note,"
                 " contact) VALUES (?,?,?,?,?,?,?,?)",
                 [(order_id, item["sku"], item["qty"], item["unit_price"],
-                  "processing", None, f"from basket {session_id}", contact or None)
+                  "processing", None, f"from basket {session_id}", sealed_contact)
                  for item in basket["items"]],
             )
             db.execute("DELETE FROM session_basket_items WHERE session_id = ?", (session_id,))
@@ -289,7 +329,11 @@ def lookup_order(order_id: str) -> str:
         rows = db.execute("SELECT * FROM orders WHERE order_id = ?", (order_id,)).fetchall()
     if not rows:
         return f"error: no order {order_id!r} in the system"
-    return json.dumps([dict(r) for r in rows], indent=1)
+    orders = [dict(r) for r in rows]
+    for order in orders:
+        order["contact"] = _open_contact(order.get("contact"),
+                                         aad=ORDERS_CONTACT.aad_for(order["order_id"]))
+    return json.dumps(orders, indent=1)
 
 
 def _like_escape(text: str) -> str:
@@ -368,13 +412,14 @@ def notify_customer(contact: str, message: str) -> str:
     """
     if not contact or "@" not in contact:
         return f"error: {contact!r} is not an email address"
+    sealed = _seal_contact(contact, aad=NOTIFICATIONS_CONTACT.aad_for()) or contact
     with closing(_db()) as db:
         db.execute(
             "CREATE TABLE IF NOT EXISTS notifications("
             "id INTEGER PRIMARY KEY AUTOINCREMENT, contact TEXT NOT NULL,"
             "message TEXT NOT NULL, sent_at TEXT NOT NULL)")
         db.execute("INSERT INTO notifications(contact, message, sent_at) VALUES (?,?,?)",
-                   (contact, message, _now()))
+                   (sealed, message, _now()))
         db.commit()
     return f"email queued to {contact}: {message}"
 

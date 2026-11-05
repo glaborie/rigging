@@ -83,7 +83,7 @@ loopback by default, which is safe only because it does not leave the host.
 | T4 | Request flood, or a client pinning workers with SSE | Per-client fixed-window limiter (240/min default, `RIGGING_SERVICE_RATE_LIMIT`, `0` disables); the key is the peer address, or the `X-Forwarded-For` client only when the peer is in `RIGGING_SERVICE_TRUSTED_PROXIES`; SSE ends on `idle` and `timeout` | In-process, resets on restart. If the proxy is untrusted or does not set the header, all clients share one bucket, so a single script can exhaust it and deny others (availability, not auth). The proxy's own limiter is the primary control |
 | T5 | Transcript disclosure through a redaction gap | Redaction before insert; tests assert on the DB file; the service never re-reads a raw payload because none is stored | Pattern-based redaction misses unstructured identifiers. Treat the DB as confidential regardless |
 | T6 | Service exposed without auth by mistake | Loopback default; startup refuses non-loopback without a token; `GET /` and `GET /health` serve no run data | A misconfigured proxy or a permissive firewall is outside the app |
-| T7 | Local user or stolen backup reads the DB | The app does not add encryption at rest; rely on file permissions (`0600`), full-disk encryption, and encrypted backups | Same-host user with file access reads everything. No app-level encryption |
+| T7 | Local user or stolen backup reads the DB | PII a tool persists (`orders.contact`, `notifications.contact`) is AEAD-sealed with a key from the environment (ADR-0027); the sentinel map is sealed in `runs/pii-vault` when a key is configured; otherwise rely on file permissions (`0600`), full-disk encryption, and encrypted backups | The event log is pseudonymised but not encrypted; the key lives beside the process, so a compromised host or a leaked `.env` defeats the sealing. Same-host user with file access reads the plaintext event log |
 | T8 | CSRF / cross-origin reads, or a page the operator visits POSTing to a loopback port | The credential is a header, not a cookie, so a cross-site form or image cannot authenticate; no CORS middleware, so a cross-origin JSON POST fails its preflight; chat additionally **requires a token even on loopback** (ADR-0023) | A browser extension with host access is outside the model |
 | T9 | Clickjacking | `frame-ancestors 'none'` + `X-Frame-Options: DENY` | — |
 | T10 | Run payload injects script into the page | Payloads escaped or assigned with `textContent`; CSP nonce; no `eval`, no `innerHTML` with unescaped data | A future edit that adds an unescaped sink would be a regression; the browser test loads real data |
@@ -218,8 +218,10 @@ Operator checklist:
 A reviewer should not assume any of the following, because the code does not
 provide it:
 
-- **No encryption at rest.** SQLite is plaintext; the app relies on the OS and
-  the volume. No KMS, no field-level encryption.
+- **No encryption at rest for the event log.** SQLite is plaintext; the app relies
+  on the OS and the volume. No KMS, no field-level encryption of transcripts. What
+  *is* sealed is PII a tool stores and the session sentinel map (ADR-0027) — with
+  the key in `.env`, which protects a leaked file, not a compromised host.
 - **Redaction is not DLP.** `redact.py` is a set of patterns. It is tested, but
   it cannot certify that a transcript is free of personal data.
 - **Pseudonymisation is not encryption.** `pii_pseudonymise` is reversible by

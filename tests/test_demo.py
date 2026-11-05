@@ -310,6 +310,61 @@ def test_notify_customer_is_side_effecting(demo_db):
     assert "anna.meier@nordwind-ag.ch" in out
 
 
+def test_notify_customer_persists_the_real_address(demo_db):
+    """The address the customer gave is data, not a placeholder: the row carries it.
+
+    The eval suite can only see `[EMAIL_1]` (the log is redacted, ADR-0025), so
+    this is the layer that proves the value itself was stored — the same split the
+    suite uses for refunds: the tool test owns the row, the eval owns the call.
+    """
+    import sqlite3
+
+    _call("notify_customer", {"contact": "anna.meier@nordwind-ag.ch",
+                              "message": "flagged for priority"})
+    rows = sqlite3.connect(demo_db).execute(
+        "select contact, message from notifications order by id desc limit 1").fetchone()
+    assert rows == ("anna.meier@nordwind-ag.ch", "flagged for priority")
+
+
+def test_a_contact_is_sealed_at_rest_when_a_key_is_set(demo_db, monkeypatch):
+    """ADR-0027: the row is ciphertext, and `lookup_order` still hands it back."""
+    from rigging.config import settings
+    from rigging.crypto import new_key
+
+    monkeypatch.setattr(settings, "pii_key", new_key())
+    _call("notify_customer", {"contact": "anna.meier@nordwind-ag.ch", "message": "x"})
+
+    import sqlite3
+    stored = sqlite3.connect(demo_db).execute(
+        "select contact from notifications order by id desc limit 1").fetchone()[0]
+    assert stored.startswith("enc:v1:") and "anna.meier" not in stored
+    assert "anna.meier@nordwind-ag.ch" in _call("notify_customer",
+                                                {"contact": "anna.meier@nordwind-ag.ch",
+                                                 "message": "y"})
+
+    # An order written with a key reads back through the tool, not as ciphertext.
+    _call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2})
+    order = json.loads(_call("submit_basket", {"contact": "joe@wh.com"}))
+    rows = sqlite3.connect(demo_db).execute(
+        "select contact from orders where order_id = ?", (order["order_id"],)).fetchall()
+    assert rows and all(r[0].startswith("enc:v1:") for r in rows), "sealed in the file"
+    assert json.loads(_call("lookup_order", {"order_id": order["order_id"]}))[0]["contact"] \
+        == "joe@wh.com", "and opened for the agent"
+
+
+def test_a_sealed_contact_without_the_key_is_a_missing_contact_not_a_crash(demo_db, monkeypatch):
+    from rigging.config import settings
+    from rigging.crypto import new_key
+
+    monkeypatch.setattr(settings, "pii_key", new_key())
+    _call("add_to_basket", {"sku": "SW-8P-GBE", "qty": 2})
+    order = json.loads(_call("submit_basket", {"contact": "joe@wh.com"}))
+
+    monkeypatch.setattr(settings, "pii_key", new_key())  # a different process, new key
+    rows = json.loads(_call("lookup_order", {"order_id": order["order_id"]}))
+    assert rows[0]["contact"] is None
+
+
 def test_notify_customer_rejects_a_non_address(demo_db):
     assert _call("notify_customer", {"contact": "[EMAIL_9]", "message": "x"}).startswith("error:")
 

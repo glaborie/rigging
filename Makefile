@@ -47,7 +47,7 @@ help: ## show this help
 	  | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-14s\033[0m %s\n", $$1, $$2}'
 	@printf '\nSetup:\n'
 	@printf '  uv sync --extra dev      core + test/lint tooling (make install adds service, mcp)\n'
-	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser]\n'
+	@printf '  uv sync --extra qdrant   retrieval (v0.3)   [also: laya, langfuse, mcp, service, browser, vault]\n'
 	@printf '\nModel access (one is enough):\n'
 	@printf '  RIGGING_PROFILE_OPENROUTER_API_KEY=...   in .env — the demo default (deepseek)\n'
 	@printf '  ollama pull qwen3:8b     fully local, the weakest model the demo must pass on\n'
@@ -63,7 +63,7 @@ help: ## show this help
 	@printf '\nFirst run: make install && make gateway && make hello\n\n'
 
 install: ## venv with dev + the extras the test suite exercises (service, mcp)
-	uv sync --extra dev --extra service --extra mcp
+	uv sync --extra dev --extra service --extra mcp --extra vault
 
 check: ## what CI runs: lint + typecheck + tests (no network)
 	$(MAKE) --no-print-directory lint typecheck test
@@ -152,7 +152,7 @@ chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
 	  $(EXPORT_ARGS)
 
-seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
+seed: ## build the demo fixture DB (deterministic; contacts sealed when RIGGING_PII_KEY is set)
 	uv run python examples/b2b-support/seed.py
 
 index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds for qdrant

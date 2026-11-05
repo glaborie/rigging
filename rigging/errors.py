@@ -43,5 +43,14 @@ class ExporterConfigError(RiggingError):
     """
 
 
+class CryptoError(RiggingError):
+    """A PII value could not be sealed or opened (ADR-0027).
+
+    Raised for a missing `[vault]` extra, a malformed key, and — the case that
+    matters — a ciphertext that does not authenticate: wrong key, or somebody
+    altered the value. The message never contains the plaintext.
+    """
+
+
 # The loop returns a `RunResult` for denial, budget exhaustion and gateway
 # failure; it does not raise. Only errors a caller must handle stay here.

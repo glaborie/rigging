@@ -19,6 +19,7 @@ from rigging.config import settings
 from rigging.errors import RiggingError
 from rigging.events import EventLog
 from rigging.manifest import AgentSpec, load_manifest
+from rigging.pii_store import SEALED_COLUMNS
 from rigging.registry import DEFAULT_REGISTRY
 
 
@@ -125,6 +126,17 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--trusted-proxies", default=None,
                        help="comma-separated peers allowed to set X-Forwarded-For "
                             "(default: 127.0.0.1,::1; never '*')")
+
+    # Reading sealed PII back is a command, not a script: it is a routine
+    # diagnostic. Sealing stays in scripts/seal_pii.py, because a migration that
+    # cannot be undone should not be one keystroke away from `--help`.
+    pii = sub.add_parser("pii", help="read the PII a tool stored (ADR-0027)")
+    pii_sub = pii.add_subparsers(dest="pii_command", required=True)
+    pii_open = pii_sub.add_parser("open", help="print the plaintext behind a sealed contact")
+    pii_open.add_argument("db", help="SQLite file (e.g. examples/b2b-support/demo.db)")
+    pii_open.add_argument("--table", choices=[spec.table for spec in SEALED_COLUMNS],
+                          default=None, help="only this table (default: all of them)")
+    pii_open.add_argument("--limit", type=int, default=None, help="stop after N values")
 
     sub.add_parser("schema", help="print the manifest JSON Schema")
     tools = sub.add_parser("tools", help="list registered capabilities")
@@ -297,6 +309,44 @@ def cmd_escalations(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pii(args: argparse.Namespace) -> int:
+    return cmd_pii_open(args)
+
+
+def cmd_pii_open(args: argparse.Namespace) -> int:
+    """`harness pii open <db>`: the plaintext behind what a tool wrote down.
+
+    Read-only, and it prints what the *file* holds next to what that opens to, so
+    a plaintext legacy row and a value sealed with another key look different
+    instead of both looking like "a contact".
+    """
+    from rigging.crypto import load_key
+    from rigging.pii_store import open_contacts
+
+    db = pathlib.Path(args.db)
+    if not db.exists():
+        print(f"no database at {db}", file=sys.stderr)
+        return 2
+    if not settings.pii_key.strip():
+        print("RIGGING_PII_KEY is empty: there is no key to open a sealed value with. "
+              "Set it in the environment or .env (see .env.example).", file=sys.stderr)
+        return 2
+    records = open_contacts(db, load_key(settings.pii_key), table=args.table,
+                            limit=None if args.limit is None else max(0, args.limit))
+    if not records:
+        print("no stored contacts in this database", file=sys.stderr)
+        return 0
+    print(f"{'column':<24} {'row':<12} {'state':<11} value")
+    for record in records:
+        value = record.value
+        if value is None:
+            value = "(cannot open: wrong key, or the ciphertext was altered)"
+        print(f"{record.column.name:<24} {record.row:<12} {record.state:<11} {value}")
+    sealed = sum(1 for record in records if record.sealed)
+    print(f"\n{len(records)} contact(s): {sealed} sealed, {len(records) - sealed} plaintext")
+    return 0
+
+
 def cmd_schema(_args: argparse.Namespace) -> int:
     from rigging.manifest import SCHEMA_PATH
 
@@ -440,6 +490,7 @@ HANDLERS = {
     "eval": cmd_eval,
     "calibrate": cmd_calibrate,
     "serve": cmd_serve,
+    "pii": cmd_pii,
 }
 
 

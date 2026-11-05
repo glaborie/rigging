@@ -64,6 +64,9 @@ rigging/
   events.py         SQLite append-only log, projections, JSONL export
   manifest.py       YAML load, JSON Schema validation, single-level defaults
   redact.py         the security boundary
+  crypto.py         AES-GCM sealing for PII that has to be stored (ADR-0027)
+  vault.py          encrypted per-session stores: sentinel maps (ADR-0027)
+  pii_store.py      where a stored contact lives, and the AAD that binds it
   client/           OpenAI-compatible httpx client + hand-written SSE parser
   guardrails/       pii (redact + pseudonymise), injection, consequential_action, commitment
   retriever/        fts5 (works), qdrant (v0.3 stub)
@@ -73,7 +76,7 @@ rigging/
                     adds the opt-in write path and WebApproval (ADR-0023)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   init_agent.py     `harness init`: the manifest interview, validated before writing
-  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve
+  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve|pii
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered
@@ -85,6 +88,7 @@ examples/parallel/                 two tools in one response (v0.6)
 examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 BENCHMARKING.md                    model-id syntax, profiles, reading the table
+scripts/seal_pii.py                one-off: seal plaintext contacts in a demo DB (ADR-0027)
 scripts/bench.py                   models x repeats driver -> results/<run>/ (one
                                    directory per invocation, never overwritten)
 scripts/langfuse_to_atif.py        Langfuse session -> ATIF v1.7 trajectory file

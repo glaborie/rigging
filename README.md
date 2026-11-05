@@ -84,6 +84,10 @@ uv run harness chat examples/hello/agent.yaml
 # Handoffs waiting for a human (escalation events, newest first)
 uv run harness escalations
 
+# Read a contact back out of the demo DB (needs RIGGING_PII_KEY, ADR-0027)
+uv run harness pii open examples/b2b-support/demo.db
+uv run harness pii open examples/b2b-support/demo.db --table notifications --limit 5
+
 # Offline: replay a recorded transcript instead of calling the API
 uv run harness run examples/hello/agent.yaml "hi" --replay examples/hello/transcript-codestral.jsonl
 
@@ -99,12 +103,12 @@ make eval MODEL=qwen3:8b PROFILE=ollama          # the fully local path
 
 # Drive the same agent from a browser: type, watch the tools run, approve a refund
 RIGGING_SERVICE_TOKEN=demo make web              # add EXPORT=langfuse for one trace per turn
+VERBOSE=1 make web                               # ...and one stdout line per HTTP request
 # http://127.0.0.1:8000 — token "demo"
 ```
 
 `MODEL=`, `PROFILE=` and `EXPORT=` override the manifest's model,
 `credential_profile` and exporters for `run`, `chat`, `eval` and `serve`/`web`
-VERBOSE=1 make web                               # ...and one stdout line per HTTP request
 (`harness run|chat|serve --export langfuse` is the same switch). Traces go to
 Langfuse Cloud using the `LANGFUSE_*` keys in `.env`; `make trace` runs an agent
 and prints the spans it produced. The demo pins `deepseek/deepseek-v4.1-flash`
@@ -286,6 +290,30 @@ live scoring run hit the daily free quota (HTTP 429), so it has no numbers yet.
 The local endpoint defaults to `http://localhost:11434`; set `OLLAMA_BASE_URL` to
 override it.
 
+## PII at rest
+
+The model path never sees a raw value: guardrails replace an address with
+`[EMAIL_1]` before it reaches the model, the event log or any exporter
+(ADR-0025). What a *tool* writes down is different — it has to store the real
+contact to do its job — so those columns are sealed with AES-256-GCM from a key
+in `.env` (ADR-0027):
+
+```bash
+# one key, 32 bytes; never committed, never logged
+python -c "from rigging.crypto import new_key; print(new_key())"   # -> RIGGING_PII_KEY=...
+uv run harness pii open examples/b2b-support/demo.db               # table|row|state|value
+uv run python scripts/seal_pii.py examples/b2b-support/demo.db --vacuum   # migrate old plaintext
+```
+
+The command prints what the file holds *and* what it opens to, so a legacy
+plaintext row and a value sealed with another key are distinguishable. What the
+ciphertext protects is a file that leaks — a backup, a disk image, a database
+attached to a ticket. It does not protect a compromised host or a leaked `.env`:
+the process must be able to read the key. The event log and the traces stay
+plaintext SQLite; they hold placeholders, not contacts. The limits are stated in
+[ADR-0027](docs/adr/0027-pii-at-rest-is-sealed-where-it-is-stored.md) and
+[`docs/threat-model.md`](docs/threat-model.md) rather than implied.
+
 ## Repository layout
 
 ```
@@ -294,6 +322,9 @@ rigging/            the package (protocols, registry, loop, client, CLI)
   types.py          canonical message/tool/reasoning types
   registry.py       decorator registry + entry-point discovery
   events.py         event-sourced run log (SQLite)
+  crypto.py         AES-GCM sealing for PII that has to be stored (ADR-0027)
+  vault.py          encrypted per-session sentinel maps (ADR-0027)
+  pii_store.py      where a stored contact lives, and the AAD that binds it
   loop.py           the agent loop (v0.1)
   client/           OpenAI-compatible HTTP client + SSE parser
   guardrails/       four deterministic built-ins
