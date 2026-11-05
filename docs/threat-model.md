@@ -1,6 +1,6 @@
 # Threat model: the web view and the event log
 
-**Status:** living document, current as of v0.8.0-dev. Decisions are recorded in
+**Status:** living document, current as of v0.8.0. Decisions are recorded in
 [ADR-0018](adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md) (the
 read-only view), [ADR-0021](adr/0021-service-auth-is-a-bearer-token.md) (auth,
 transport, rate limiting), [ADR-0023](adr/0023-the-web-ui-can-run-an-agent.md)
