@@ -356,6 +356,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/adr/`](docs/adr/) — 23 decisions with the alternatives that were rejected
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 - [`docs/threat-model.md`](docs/threat-model.md) — assets, threats, controls, non-claims
+- [`docs/red-team.md`](docs/red-team.md) — promptfoo scans of the demo agent, judged on the run, not the reply
 - [`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) — drive the agent from a browser, approve a refund
 - [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 

@@ -88,6 +88,8 @@ examples/parallel/                 two tools in one response (v0.6)
 examples/mlflow/                   MLflow exporter smoke agent (v0.6)
 docs/showcase-v0.6.md              four commands, four ADRs — the v0.6 demo
 BENCHMARKING.md                    model-id syntax, profiles, reading the table
+docs/red-team.md                   promptfoo scans: the target, the controls, the findings
+redteam/                           promptfoo provider, configs and generated probes (v0.8)
 scripts/seal_pii.py                one-off: seal plaintext contacts in a demo DB (ADR-0027)
 scripts/bench.py                   models x repeats driver -> results/<run>/ (one
                                    directory per invocation, never overwritten)
@@ -105,6 +107,8 @@ uv sync --extra dev          # env
 make help                    # every target, every override, gateway choices
 make check                   # ruff + mypy --strict + pytest (no network)
 make test-browser            # opt-in: render the web view and run one turn in Chromium
+redteam/run.sh controls      # opt-in, live: promptfoo known-good cases before a scan
+redteam/run.sh scan          # ...and the unattended red team (needs npx + .env)
 make bench                   # models x repeats -> results/<utc>/ (Langfuse traces by default)
 uv run harness init          # interview -> agents/<name>/agent.yaml (validated at load)
 uv run harness tools         # registry sanity

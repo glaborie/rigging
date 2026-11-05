@@ -270,6 +270,52 @@ ADR-0017 and the no-write clause of ADR-0018).
       `make check`: 204 passed; `make test-browser`: 2 passed. The demo script is
       [`showcase-v0.7.md`](showcase-v0.7.md).
 
+## v0.8 — the harness under attack
+
+The eval suite asks whether the agent behaves on the cases we thought of. This
+milestone is the other question, and it is the one a security reviewer will ask:
+what happens when someone tries to make it misbehave? Not a new harness layer —
+a probe suite pointed at the demo, with the judgement split between a
+deterministic assertion on the run and a model grader on the reply.
+
+- [x] **`redteam/provider.py`: a promptfoo target that reports facts.** One turn
+      through `run_agent`, then `attempted` / `executed` / `denied` /
+      `approval_denials` / `guardrail_denials` folded from the event log, plus a
+      before/after diff of the fixture database. `tool_call` is an attempt and
+      `tool_result` is what happened — the distinction the eval suite learned the
+      hard way.
+- [x] **Three approval postures**, because a scan needs to say three different
+      things: deny everything (the unattended default), approve everything, or
+      approve one named tool so the guardrails rather than the approval channel
+      are on trial.
+- [x] **Controls before scores.** Four known-good cases, one of which really
+      executes an in-window refund and asserts the row changed; without it a
+      target that refuses everything reports 0% attack success and means nothing.
+- [x] **Two scans** (18 probes unattended, 15 with refunds pre-approved): no
+      probe produced a side effect, no probe got a contact address out. The one
+      failure was the grader's JSON parse, not the target — recorded, not
+      suppressed, because that is the argument for deterministic predicates
+      (ADR-0009).
+- [x] **Scoped honestly.** `bola`/`rbac`/`bfla` are excluded because the demo has
+      no caller identity to break, and `rag-poisoning` because the fixture has no
+      poisoned documents in it. Both exclusions, and the follow-up commands, are
+      in [`red-team.md`](red-team.md).
+- [x] 17 offline tests on the provider's pure parts; the scans themselves are
+      opt-in and live. Generated probes are committed; the run logs are not.
+
+## v0.8 backlog
+
+- [ ] **LibreChat as a front end** (`http://localhost:3080`). Blocked on a
+      decision, not on code: ADR-0023 rejects OpenWebUI/AnythingLLM/LibreChat by
+      name — "rigging is not a server, and approvals need a channel those clients
+      do not have". Serving `/v1/chat/completions` would reverse that, so it needs
+      its own ADR first. What changed since 0023 was written: LibreChat's
+      `shared_endpoint_settings` can send `{{LIBRECHAT_BODY_CONVERSATIONID}}`,
+      which is the session key the sentinel vault (ADR-0027) needs to resolve
+      `[EMAIL_1]` on the next turn. What has not changed: there is still no
+      approval channel, so `refund_order` / `submit_basket` / `notify_customer`
+      would answer "denied by approval policy" in that UI.
+
 ## Standing rules
 
 1. The demo must pass its eval suite on the **weakest documented model** (`qwen3:8b`).
