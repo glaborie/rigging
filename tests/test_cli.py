@@ -49,6 +49,37 @@ def test_chat_and_serve_accept_the_export_flag():
         ["serve", "--manifest", "a.yaml", "--export", "langfuse"]).export == ["langfuse"]
 
 
+def test_serve_verbose_is_off_by_default_and_accepts_short_form():
+    parser = cli._parser()
+    assert parser.parse_args(["serve"]).verbose is False
+    assert parser.parse_args(["serve", "-v"]).verbose is True
+    assert parser.parse_args(["serve", "--verbose"]).verbose is True
+
+
+def test_serve_verbose_raises_the_uvicorn_log_level(tmp_path, monkeypatch, capsys):
+    """The access log is uvicorn's, on stdout; log_level is the whole switch."""
+    import uvicorn
+
+    import rigging.service as service
+
+    db = tmp_path / "e.db"
+    db.write_text("")
+    seen: dict[str, object] = {}
+    monkeypatch.setattr(uvicorn, "run", lambda app, **kw: seen.update(kw))
+    monkeypatch.setattr(service, "check_bind", lambda *a, **k: None)
+    monkeypatch.setattr(service, "check_trusted_proxies", lambda *a, **k: None)
+    monkeypatch.setattr(service, "create_app", lambda *a, **k: object())
+
+    assert cli.main(["serve", "--db", str(db)]) == 0
+    assert seen["log_level"] == "warning", "the page stays quiet by default"
+    assert "access log" not in capsys.readouterr().out
+
+    seen.clear()
+    assert cli.main(["serve", "--db", str(db), "-v"]) == 0
+    assert seen["log_level"] == "info"
+    assert "access log: on" in capsys.readouterr().out
+
+
 def test_export_is_repeatable_and_untouched_when_absent(monkeypatch):
     spec = load_manifest(str(ROOT / "examples/b2b-support/agent.yaml"))
     seen = {}

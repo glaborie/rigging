@@ -115,6 +115,9 @@ def _parser() -> argparse.ArgumentParser:
                        help="override the manifest exporters (chat; repeatable, e.g. langfuse)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
     serve.add_argument("--port", type=int, default=8000)
+    serve.add_argument("-v", "--verbose", action="store_true",
+                       help="log every HTTP request on stdout (uvicorn access log: "
+                            "client, method, path, status)")
     serve.add_argument("--ssl-certfile", default=None,
                        help="TLS certificate (PEM); with --ssl-keyfile serves https")
     serve.add_argument("--ssl-keyfile", default=None,
@@ -385,6 +388,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
     print("proxy trust: configured (X-Forwarded-For sets the rate-limit key)"
           if trusted.strip() else
           "proxy trust: off — every client shares the socket peer's bucket")
+    if args.verbose:
+        print("access log: on — one line per request on stdout (SSE connections log "
+              "on connect, not per event)")
     uvicorn.run(
         create_app(db, tokens=tokens,
                    rate_limit_per_minute=settings.service_rate_limit,
@@ -392,7 +398,9 @@ def cmd_serve(args: argparse.Namespace) -> int:
         host=args.host, port=args.port,
         ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
         proxy_headers=True, forwarded_allow_ips=trusted,
-        log_level="warning",
+        # uvicorn's "access" logger writes to stdout; its level follows log_level,
+        # so this one switch is the whole feature. Warning keeps the page quiet.
+        log_level="info" if args.verbose else "warning",
     )
     return 0
 

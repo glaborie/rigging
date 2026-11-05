@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.responses import HTMLResponse, Response, StreamingResponse
+from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
 from rigging.events import project_escalations
@@ -352,6 +352,22 @@ def create_app(
     def index(request: Request) -> str:
         nonce = getattr(request.state, "csp_nonce", "")
         return INDEX_HTML.replace("__CSP_NONCE__", nonce)
+
+    @app.get("/health")
+    def health() -> Response:
+        """Readiness for whatever is watching the port: an IDE preview, docker, a proxy.
+
+        Public and tokenless like `GET /` — it carries no run data, only whether
+        this process can still read the log it serves. 503 means the event log
+        moved or vanished under a running server. Unrate-limited on purpose: a
+        probe that gets throttled reads as an outage.
+        """
+        try:
+            with closing(_connect(db)) as conn:
+                conn.execute("SELECT 1").fetchone()
+        except Exception:  # any failure here is "not ready"
+            return JSONResponse({"status": "unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     @app.get("/api/runs", dependencies=guard)
     def list_runs(limit: int = 20) -> dict[str, Any]:

@@ -272,7 +272,8 @@ turn while a run is in flight is a `409` rather than two interleaved histories.
 Auth (ADR-0021) is one bearer token, `RIGGING_SERVICE_TOKEN`, checked with
 `hmac.compare_digest` on every `/api/*` route. `GET /` stays public: it is static
 markup with no run data, and the page asks for the token when its first API call
-returns 401, keeping it in `sessionStorage`. The stream is consumed with
+returns 401, keeping it in `sessionStorage`. `GET /health` is public for the same
+reason — a liveness answer carries no run data (see below). The stream is consumed with
 `fetch` + `ReadableStream` rather than `EventSource`, because only the former can
 send a header — the token never appears in a URL. With no token configured,
 `harness serve` refuses any non-loopback bind instead of opening a port.
@@ -286,6 +287,23 @@ to uvicorn, so `X-Forwarded-For` is honoured only from a configured proxy and an
 untrusted peer cannot choose its own bucket. The exposure model — TLS proxy,
 loopback bind, the `sessionStorage` residual risk, and what is explicitly not
 claimed — is [`threat-model.md`](threat-model.md).
+
+`harness serve -v` (`make serve VERBOSE=1`) turns on uvicorn's access log, which
+is the only place a request is visible: one line per request on **stdout**
+(`INFO: 127.0.0.1:41078 - "GET /api/runs HTTP/1.1" 200 OK`), while startup and
+shutdown stay on stderr, so `serve -v > api.log` is a clean request log. It is
+off by default (`log_level="warning"`) because a page polls `/api/runs/<id>/events`
+in a loop and would otherwise fill the terminal. An SSE stream logs when the
+connection opens, not once per event.
+
+`GET /health` exists for whoever watches the port — an IDE preview that probes
+`/health`, a compose healthcheck, a TLS proxy's readiness check. It is public and
+tokenless like `GET /`, because it answers one question with no run data in it:
+can this process still read the log it serves? `{"status":"ok"}` (200) when yes,
+`{"status":"unavailable"}` (503) when the event log moved or vanished under a
+running server. It is deliberately outside the `/api/*` rate limit — a throttled
+probe reads as an outage — and outside auth, since a probe that must present a
+bearer token cannot report readiness. ADR-0021 postscript records the decision.
 
 The page is a real browser test, not just a route test:
 `tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in

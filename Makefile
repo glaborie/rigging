@@ -129,10 +129,11 @@ record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
 	uv run python scripts/record_demo.py
 	uv run python scripts/cast_to_gif.py
 
-serve: ## read-only web view of the event log: http://127.0.0.1:8000
-	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),)
+serve: ## read-only web view of the event log: http://127.0.0.1:8000 [VERBOSE=1 logs every request]
+	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
+	  $(if $(filter 1,$(VERBOSE)),--verbose,)
 
-web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN)
+web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN) EXPORT=langfuse
 	uv run harness serve $(if $(DB),--db $(DB),) $(if $(PORT),--port $(PORT),) \
 	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \

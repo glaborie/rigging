@@ -103,6 +103,7 @@ RIGGING_SERVICE_TOKEN=demo make web              # add EXPORT=langfuse for one t
 
 `MODEL=`, `PROFILE=` and `EXPORT=` override the manifest's model,
 `credential_profile` and exporters for `run`, `chat`, `eval` and `serve`/`web`
+VERBOSE=1 make web                               # ...and one stdout line per HTTP request
 (`harness run|chat|serve --export langfuse` is the same switch). Traces go to
 Langfuse Cloud using the `LANGFUSE_*` keys in `.env`; `make trace` runs an agent
 and prints the spans it produced. The demo pins `deepseek/deepseek-v4.1-flash`

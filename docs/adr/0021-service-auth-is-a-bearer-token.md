@@ -100,3 +100,26 @@ trusted proxy, so an appended header cannot be spoofed from the client side. If
 the peer is untrusted or the header is absent, the limit is one shared bucket —
 an availability risk, not an auth bypass, and the reason the proxy's own limiter
 remains the primary control.
+
+### `GET /health` is public (2026-11-05)
+
+Anything that watches a port — an IDE preview, a compose healthcheck, a TLS
+proxy — probes a conventional path, and the first such probe to reach this
+service was answered `404` (visible only once `serve -v` existed). A probe that
+gets 404 or 401 reports the service as down, which is worse than not having the
+endpoint: it invites the operator to disable the check.
+
+`GET /health` is therefore public and tokenless, like `GET /`. It returns
+`{"status":"ok"}` when the process can still read the event log it serves and
+`{"status":"unavailable"}` with 503 when the log moved or vanished. Two
+deliberate exemptions:
+
+- **no bearer token**: a readiness probe has nowhere to keep one, and the
+  endpoint reveals nothing about runs, sessions or the database path;
+- **no rate limit**: the limiter would answer a probe with `429`, which reads as
+  an outage. The cost is one extra `SELECT 1` per probe against a local SQLite
+  file, which the read-only connection makes cheap.
+
+Rejected: a `/health` that only returns a constant. It would report healthy with
+the log unlinked under a running server, which is exactly the failure a
+read-only view must not hide.
