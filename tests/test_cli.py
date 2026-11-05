@@ -56,6 +56,21 @@ def test_serve_verbose_is_off_by_default_and_accepts_short_form():
     assert parser.parse_args(["serve", "--verbose"]).verbose is True
 
 
+def test_serve_openai_api_is_opt_in():
+    parser = cli._parser()
+    assert parser.parse_args(["serve"]).openai_api is False
+    assert parser.parse_args(["serve", "--manifest", "a.yaml",
+                              "--openai-api"]).openai_api is True
+
+
+def test_serve_openai_api_needs_the_manifest_it_serves(tmp_path, capsys):
+    """The surface is one agent, so there is nothing to serve without a manifest."""
+    db = tmp_path / "e.db"
+    db.write_text("")
+    assert cli.main(["serve", "--db", str(db), "--openai-api"]) == 2
+    assert "--openai-api serves an agent" in capsys.readouterr().err
+
+
 def test_serve_verbose_raises_the_uvicorn_log_level(tmp_path, monkeypatch, capsys):
     """The access log is uvicorn's, on stdout; log_level is the whole switch."""
     import uvicorn

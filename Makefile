@@ -37,7 +37,7 @@ REPEATS  ?= 5
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
         retrieval hello demo run chat index eval bench up down logs clean trace serve record \
-        test-browser browser-install
+        test-browser browser-install openai librechat
 
 help: ## show this help
 	@printf '\nrigging — modular agent harness\n\n'
@@ -55,6 +55,8 @@ help: ## show this help
 	@printf '\nCompose profiles:\n'
 	@printf '  (default)      omniroute only — smallest footprint, enough to run an agent\n'
 	@printf '  retrieval      + qdrant on :6345 (6333/6335/6340 are taken by other stacks)\n'
+	@printf '  librechat      + LibreChat on :3080 (with `make openai` on the host)\n'
+	@printf '\nChat UI: make openai (harness /v1 on :8000) + make librechat (LibreChat :3080)\n'
 	@printf '\nTraces go to Langfuse Cloud: set LANGFUSE_HOST / _PUBLIC_KEY / _SECRET_KEY in .env.\n'
 	@printf '  make observability       check those keys (runs no agent, emits nothing)\n'
 	@printf '  make trace               run the example, then print the spans it produced\n'
@@ -146,6 +148,22 @@ web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN) 
 	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
 	  $(if $(EXPORT),--export $(EXPORT),)
+
+openai: ## OpenAI-compatible /v1 for LibreChat on :8000 (needs RIGGING_SERVICE_TOKEN)
+	RIGGING_SERVICE_ALLOW_PLAINTEXT=1 uv run harness serve \
+	  $(if $(DB),--db $(DB),) \
+	  --manifest $(if $(filter file,$(origin MANIFEST)),$(WEB_MANIFEST),$(MANIFEST)) \
+	  --openai-api --host $(or $(OPENAI_HOST),0.0.0.0) \
+	  --port $(or $(OPENAI_PORT),8000) \
+	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
+	  $(EXPORT_ARGS)
+
+librechat: ## LibreChat on :3080 (compose profile; run `make openai` in another terminal)
+	@if [ -z "$${RIGGING_SERVICE_TOKEN}" ] && ! grep -qE '^RIGGING_SERVICE_TOKEN=.+' .env 2>/dev/null; then \
+	  printf 'warning: RIGGING_SERVICE_TOKEN is empty; set it in .env or LibreChat cannot authenticate\n'; fi
+	docker compose --profile librechat up -d librechat
+	@printf 'LibreChat: http://localhost:%s\n' "$(or $(LIBRECHAT_PORT),3080)"
+	@printf 'The harness must be running: make openai\n'
 
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),) \

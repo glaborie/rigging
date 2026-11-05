@@ -8,8 +8,11 @@ agent loop, event log, MCP tools, OTel/Langfuse and MLflow tracing, an eval CLI,
 three pluggable decision-model adapters, automatic entry-points discovery,
 subagents as child runs, opt-in parallel tool execution, and a web view over the
 same event log with bearer-token auth — read-only, or chat with in-page approvals.
-See [`docs/milestones.md`](docs/milestones.md) for milestone evidence and
-[`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo.
+v0.8 adds the red-team suite and an opt-in OpenAI-compatible `/v1` surface, so a
+chat UI such as LibreChat can drive the same loop (ADR-0028; no approvals there).
+See [`docs/milestones.md`](docs/milestones.md) for milestone evidence,
+[`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) for the browser demo, and
+[`docs/librechat.md`](docs/librechat.md) for the chat-UI wiring.
 
 ![the demo: tools, a guarded refund run, and the event trail it wrote](docs/demo.gif)
 
@@ -259,6 +262,27 @@ and asserts the tool result appears. The postscript in
 [ADR-0018](docs/adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md)
 has the honest version.
 
+### Use it from LibreChat (or any OpenAI-compatible UI)
+
+`--openai-api` serves `/v1/models` and `/v1/chat/completions` for the same agent,
+so a chat UI can drive the loop directly:
+
+```bash
+RIGGING_SERVICE_TOKEN=demo RIGGING_SERVICE_ALLOW_PLAINTEXT=1 \
+uv run harness serve --manifest examples/b2b-support/agent.yaml \
+  --openai-api --host 0.0.0.0
+```
+
+The UI needs one header — `X-Conversation-Id:
+'{{LIBRECHAT_BODY_CONVERSATIONID}}'` — because the session (and the PII sentinel
+map that gives a tool the real address behind `[EMAIL_1]`) is keyed by
+conversation. Side-effecting tools are **denied** there: the UI has no approval
+channel, so the loop gets `AutoDenyApproval` (ADR-0028). `make web` stays the one
+surface that shows an approval as a decision. The two-command path is
+`make openai` in one terminal and `make librechat` in another; wiring,
+`librechat.yaml` and the troubleshooting table:
+[`docs/librechat.md`](docs/librechat.md).
+
 ## Decision models: cloud or local
 
 Decision models share the `DecisionModel` protocol and registry; select one by
@@ -357,6 +381,7 @@ tests/            unit + SSE wire fixtures + replay integration
 - [`docs/milestones.md`](docs/milestones.md) — what ships when, and the publish gate
 - [`docs/threat-model.md`](docs/threat-model.md) — assets, threats, controls, non-claims
 - [`docs/red-team.md`](docs/red-team.md) — promptfoo scans of the demo agent, judged on the run, not the reply
+- [`docs/librechat.md`](docs/librechat.md) — drive the agent from a chat UI over `/v1` (ADR-0028)
 - [`docs/showcase-v0.7.md`](docs/showcase-v0.7.md) — drive the agent from a browser, approve a refund
 - [`docs/showcase-v0.6.md`](docs/showcase-v0.6.md) — four commands that demonstrate v0.6
 

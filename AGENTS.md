@@ -14,8 +14,9 @@ deliverable, and a reviewer's first five minutes matter as much as the tests.**
 Current state: v0.7.0 released (2026-11-03). The loop,
 client, registry, event log, manifest, guardrails, retriever, Laya decision model,
 MCP tools, OTel/Langfuse + MLflow exporters, eval CLI, web view with bearer auth
-(read-only, or chat with in-page approvals when `--manifest` is passed),
-subagents and opt-in parallel tool execution are implemented and tested (204
+(read-only, or chat with in-page approvals when `--manifest` is passed), the
+opt-in OpenAI-compatible `/v1` surface for LibreChat (`--openai-api`, ADR-0028),
+subagents and opt-in parallel tool execution are implemented and tested (373
 offline tests plus two browser tests; ruff + `mypy --strict` clean). All four
 exit-criteria demos verified live.
 
@@ -73,7 +74,8 @@ rigging/
   decide/           laya (v0.3 stub, advisory only)
   tools/            function -> Tool adapter, JSON Schema from annotations
   service/          FastAPI + SSE view of the event log (ADR-0018); chat.py
-                    adds the opt-in write path and WebApproval (ADR-0023)
+                    adds the opt-in write path and WebApproval (ADR-0023);
+                    openai_api.py serves /v1 for a chat UI, no approvals (ADR-0028)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   init_agent.py     `harness init`: the manifest interview, validated before writing
   cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve|pii

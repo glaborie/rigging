@@ -25,8 +25,15 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingResponse
 from pydantic import BaseModel, Field
 
+from rigging.errors import RiggingError
 from rigging.events import project_escalations
 from rigging.service.chat import ChatRunner
+from rigging.service.openai_api import (
+    ChatCompletionRequest,
+    ModelNotFound,
+    OpenAIBridge,
+    TurnFailed,
+)
 from rigging.service.ratelimit import RateLimiter
 
 #: How often the SSE generator re-reads the log while a run is in flight.
@@ -273,6 +280,14 @@ def _rate_limit_dependency(limiter: RateLimiter) -> Any:
     return enforce
 
 
+def _openai_error(status: int, message: str, kind: str = "invalid_request_error") -> JSONResponse:
+    """An error a chat UI can render: OpenAI's envelope, not FastAPI's `detail`."""
+    return JSONResponse(
+        status_code=status,
+        content={"error": {"message": message, "type": kind, "code": status}},
+    )
+
+
 def _csp(nonce: str) -> str:
     """Only the page's own inline script and style may run; no framing, no forms."""
     return (
@@ -308,17 +323,24 @@ def create_app(
     tokens: Sequence[str] | str | None = None,
     rate_limit_per_minute: int = 240,
     runner: ChatRunner | None = None,
+    bridge: OpenAIBridge | None = None,
 ) -> FastAPI:
     """Build the app around one SQLite event log.
 
-    `tokens` guards every `/api/*` route; the HTML shell stays public so the page
-    can ask for the token (ADR-0021). Empty tokens means no auth — only valid for
-    a loopback bind, which `harness serve` enforces. `rate_limit_per_minute`
-    caps requests per client IP per minute; `0` disables it.
+    `tokens` guards every `/api/*` and `/v1/*` route; the HTML shell stays public
+    so the page can ask for the token (ADR-0021). Empty tokens means no auth —
+    only valid for a loopback bind, which `harness serve` enforces.
+    `rate_limit_per_minute` caps requests per client IP per minute; `0` disables
+    it.
 
     `runner` turns on the chat write path (ADR-0023). It is refused without a
     token: a page on any origin can POST to a loopback port, and the token is the
     one thing that page cannot read.
+
+    `bridge` turns on the OpenAI-compatible `/v1` surface for a chat UI (ADR-0028).
+    It is refused without a token for the same reason, with less ambiguity: a
+    chat-completions endpoint is exactly the shape every one of those tools
+    already knows how to call.
     """
     if not Path(db).exists():
         raise FileNotFoundError(f"no event log at {db} — run an agent first")
@@ -330,6 +352,12 @@ def create_app(
             "refusing to enable the chat write path without RIGGING_SERVICE_TOKEN: "
             "any page the browser visits can POST to a loopback port. Set a token "
             "or start `harness serve` without --manifest (read-only)."
+        )
+    if bridge is not None and not token_tuple:
+        raise ValueError(
+            "refusing to serve /v1/chat/completions without RIGGING_SERVICE_TOKEN: "
+            "the OpenAI surface is a write path, and any client that can reach the "
+            "port could run the agent. Set a token or drop --openai-api."
         )
     limiter = RateLimiter(rate_limit_per_minute)
     guard = [Depends(_rate_limit_dependency(limiter)), Depends(_auth_dependency(token_tuple))]
@@ -406,6 +434,47 @@ def create_app(
                     status_code=409, detail="no approval is waiting for this run"
                 )
             return {"run_id": run_id, "approved": body.approve}
+
+    if bridge is not None:
+
+        @app.get("/v1/models", dependencies=guard)
+        def openai_models() -> dict[str, Any]:
+            """What a UI's model picker lists: one entry, the agent's name.
+
+            Not the manifest's model id: a manifest can change models without the
+            UI being reconfigured, and the UI's id should mean "this agent".
+            """
+            return {"object": "list", "data": [{
+                "id": bridge.model_id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "rigging",
+            }]}
+
+        @app.post("/v1/chat/completions", dependencies=guard)
+        def openai_chat(request: Request, body: ChatCompletionRequest) -> Response:
+            """The OpenAI write path (ADR-0028): one agent, one turn, no approvals."""
+            try:
+                turn = bridge.prepare(body, request.headers.get("x-conversation-id"))
+            except ModelNotFound as exc:
+                return _openai_error(404, str(exc), "model_not_found")
+            except RiggingError as exc:
+                return _openai_error(400, str(exc))
+            if _session_running(db, turn.session_id):
+                # The same rule as the page (ADR-0023): two turns of one
+                # conversation cannot interleave into one history.
+                return _openai_error(409, "a turn is still running for this conversation",
+                                     "turn_in_progress")
+            if body.stream:
+                return StreamingResponse(
+                    bridge.stream(turn, body),
+                    media_type="text/event-stream",
+                    headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+                )
+            try:
+                return JSONResponse(bridge.complete(turn, body))
+            except TurnFailed as exc:
+                return _openai_error(502, str(exc), "run_failed")
 
     @app.get("/api/runs/{run_id}", dependencies=guard)
     def get_run(run_id: str) -> dict[str, Any]:

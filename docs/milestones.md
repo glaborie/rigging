@@ -313,18 +313,30 @@ deterministic assertion on the run and a model grader on the reply.
 - [x] 17 offline tests on the provider's pure parts; the scans themselves are
       opt-in and live. Generated probes are committed; the run logs are not.
 
+- [x] **A chat UI can drive the agent (ADR-0028).** `harness serve --openai-api`
+      serves `GET /v1/models` and `POST /v1/chat/completions` for one agent,
+      streamed or not, and each request is the same `run_agent` the CLI calls.
+      ADR-0023 rejected exactly this and is amended rather than ignored: the
+      sentence "no approvals" was right, so the bridge replaces only the
+      manifest's `cli` policy with `AutoDenyApproval` and the UI shows a refusal
+      instead of pretending to ask. What made it feasible was LibreChat's
+      `{{LIBRECHAT_BODY_CONVERSATIONID}}` header — the session key the sentinel
+      vault needs so turn 2 can resolve `[EMAIL_1]` — and the request is refused
+      without it. Streaming is live unless the manifest has an `on_output`
+      guardrail; then the answer is buffered until the policy runs, so the stream
+      cannot show a commitment `commitment_check` is about to deny. `make web`
+      remains the surface that shows an approval as a decision;
+      [`librechat.md`](librechat.md) has the wiring and the four ways it fails.
+
 ## v0.8 backlog
 
-- [ ] **LibreChat as a front end** (`http://localhost:3080`). Blocked on a
-      decision, not on code: ADR-0023 rejects OpenWebUI/AnythingLLM/LibreChat by
-      name — "rigging is not a server, and approvals need a channel those clients
-      do not have". Serving `/v1/chat/completions` would reverse that, so it needs
-      its own ADR first. What changed since 0023 was written: LibreChat's
-      `shared_endpoint_settings` can send `{{LIBRECHAT_BODY_CONVERSATIONID}}`,
-      which is the session key the sentinel vault (ADR-0027) needs to resolve
-      `[EMAIL_1]` on the next turn. What has not changed: there is still no
-      approval channel, so `refund_order` / `submit_basket` / `notify_customer`
-      would answer "denied by approval policy" in that UI.
+- [ ] **Streaming tool activity into the UI.** `/v1/chat/completions` returns the
+      assistant's text; the tool calls a turn made are only in the event log.
+      A UI can show them only if the bridge emits them somewhere the protocol
+      allows — a `delta` the client ignores is not that place.
+- [ ] **An approval channel for non-page clients.** `AutoDenyApproval` is the
+      honest default for a UI without one. A queue with a POST would let a
+      LibreChat operator answer, at the cost of knowing who is answering.
 
 ## Standing rules
 

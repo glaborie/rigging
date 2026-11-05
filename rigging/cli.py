@@ -112,6 +112,10 @@ def _parser() -> argparse.ArgumentParser:
     serve.add_argument("--model", default=None, help="override the manifest's model (chat)")
     serve.add_argument("--profile", default=None,
                        help="override the manifest credential_profile (chat)")
+    serve.add_argument("--openai-api", action="store_true",
+                       help="also serve /v1/models and /v1/chat/completions for a chat UI "
+                            "such as LibreChat (needs --manifest and a token; no approvals "
+                            "in that UI, side-effecting tools are denied — ADR-0028)")
     serve.add_argument("--export", action="append", default=None, metavar="NAME",
                        help="override the manifest exporters (chat; repeatable, e.g. langfuse)")
     serve.add_argument("--host", default="127.0.0.1", help="bind address (default: loopback only)")
@@ -411,6 +415,15 @@ def cmd_serve(args: argparse.Namespace) -> int:
                   "for the read-only view.", file=sys.stderr)
             return 2
         runner = ChatRunner(spec, db)
+    bridge = None
+    if args.openai_api:
+        if runner is None:
+            print("--openai-api serves an agent: it needs --manifest (and the same "
+                  "RIGGING_SERVICE_TOKEN as chat).", file=sys.stderr)
+            return 2
+        from rigging.service.openai_api import OpenAIBridge
+
+        bridge = OpenAIBridge(runner.spec, db)
     if bool(args.ssl_certfile) != bool(args.ssl_keyfile):
         print("--ssl-certfile and --ssl-keyfile go together", file=sys.stderr)
         return 2
@@ -427,10 +440,16 @@ def cmd_serve(args: argparse.Namespace) -> int:
         return 2
     scheme = "https" if tls else "http"
     mode = "chat + runs" if runner is not None else "read-only"
+    if bridge is not None:
+        mode += " + /v1"
     print(f"rigging runs: {scheme}://{args.host}:{args.port}  ({mode}, db={db})")
     if runner is not None:
         print(f"agent: {runner.spec.name} · {runner.spec.model} "
               f"(profile {runner.spec.credential_profile or 'default'})")
+    if bridge is not None:
+        print(f"openai api: /v1/models + /v1/chat/completions for {bridge.model_id!r} "
+              "(requires X-Conversation-Id)")
+        print("approvals: none in this UI — side-effecting tools are denied (ADR-0028)")
     print(f"auth: {'bearer token' if tokens else 'none — loopback only (ADR-0021)'}")
     print("rate limit: "
           + (f"{settings.service_rate_limit}/min per client"
@@ -444,7 +463,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
     uvicorn.run(
         create_app(db, tokens=tokens,
                    rate_limit_per_minute=settings.service_rate_limit,
-                   runner=runner),
+                   runner=runner, bridge=bridge),
         host=args.host, port=args.port,
         ssl_certfile=args.ssl_certfile, ssl_keyfile=args.ssl_keyfile,
         proxy_headers=True, forwarded_allow_ips=trusted,

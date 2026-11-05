@@ -1,8 +1,8 @@
 # ADR-0017: Deliberate non-goals
 
 **Status:** Accepted; partly superseded by ADR-0018 (web UI), ADR-0019
-(subagents), ADR-0021 (service auth), ADR-0022 (parallel tool execution) and
-ADR-0023 (a write-capable web UI).
+(subagents), ADR-0021 (service auth), ADR-0022 (parallel tool execution),
+ADR-0023 (a write-capable web UI) and ADR-0028 (an OpenAI-compatible front door).
 
 ## Context
 
@@ -33,6 +33,7 @@ prediction was right.
 | user auth before the service milestone | bearer-token service auth (v0.6) | ADR-0021 |
 | parallel tool execution | opt-in `parallel_tools` (v0.6) | ADR-0022 |
 | a *write-capable* web UI | opt-in chat with in-page approvals (v0.7) | ADR-0023 |
+| an OpenAI-compatible server for chat UIs | opt-in `/v1` for LibreChat (v0.8); no approvals there | ADR-0028 |
 
 The clause each superseding ADR replaces is named in its own Status line, so the
 chain is readable in both directions.

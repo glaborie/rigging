@@ -242,6 +242,8 @@ need conversation state ignore it.
 | `GET /api/runs/{id}/stream` | SSE: replay, then tail by `seq` until the run ends, goes idle, or hits `timeout` |
 | `POST /api/chat` | *(with `--manifest`)* start one `run_agent`, return `{session_id, run_id}` |
 | `POST /api/runs/{id}/approval` | *(with `--manifest`)* answer a waiting side-effecting tool |
+| `GET /v1/models` | *(with `--openai-api`)* one model: the agent's name (ADR-0028) |
+| `POST /v1/chat/completions` | *(with `--openai-api`)* the same `run_agent`, in OpenAI's wire format, streamed or not |
 
 Properties that stay deliberate:
 
@@ -258,6 +260,12 @@ Properties that stay deliberate:
 - **No second store.** The page renders whatever is in the log, and multi-turn
   history is `EventLog.session_messages()` — a projection over the session's root
   runs. A restart loses nothing.
+- **Two write paths, one loop.** `/v1/chat/completions` is the same `run_agent`
+  behind OpenAI's format, for a chat UI (ADR-0028). Its history is the client's
+  `messages` array (pseudonymised or redacted before it reaches the model,
+  because the client keeps the user's raw text) and `X-Conversation-Id` keys the
+  session; it returns the assistant's text only, and replaces the manifest's
+  `cli` policy with `AutoDenyApproval` because that UI has no approval channel.
 - **No push infrastructure.** The SSE generator polls `run_events` every 300 ms
   by `seq`. A run that outlives `idle_seconds` closes the connection; the page
   does not auto-reconnect (it uses `fetch` + `ReadableStream` so it can send a
@@ -304,6 +312,31 @@ can this process still read the log it serves? `{"status":"ok"}` (200) when yes,
 running server. It is deliberately outside the `/api/*` rate limit — a throttled
 probe reads as an outage — and outside auth, since a probe that must present a
 bearer token cannot report readiness. ADR-0021 postscript records the decision.
+
+### The OpenAI-compatible surface (v0.8, ADR-0028)
+
+The two `/v1` routes are opt-in and off without the flag. With it, the loop is
+still the only thing that runs an agent: `messages` is split into the last user
+message (the prompt) and the prior user/assistant turns (the history, cleaned with
+the session's sentinel map or `redact_text` because the client stores the user's
+raw words), system and tool messages are dropped so the manifest owns the prompt,
+and the assistant's text is the entire response. Tool calls stay in the event log, because the client
+has no way to answer one.
+
+`X-Conversation-Id` is required and hashed into `lc_<sha256[:16]>`; that is the
+session key the sentinel vault needs (ADR-0027), so a placeholder from turn 1
+resolves on turn 2 and two conversations never share a map. The bridge replaces
+only the manifest's `cli` approval policy with `AutoDenyApproval` — there is no
+approval channel in the OpenAI protocol, so a side-effecting tool is denied and
+the loop records `approval_verdict`. `/v1/*` reuses the bearer token, the rate
+limiter and the bind rules; it is not a second auth model.
+
+Streaming is live when the manifest has no `on_output` guardrail. With one, the
+answer is buffered until the guardrail has run and then emitted in chunks: a
+token stream that shows a commitment `commitment_check` is about to deny would be
+a second, unguarded answer path. `[DONE]` always ends a stream, and a failure is
+an SSE `error` frame. The LibreChat configuration and the threat-model delta are
+in [`librechat.md`](librechat.md) and ADR-0028.
 
 The page is a real browser test, not just a route test:
 `tests/test_service_browser.py` serves the app on a loopback socket, loads `/` in

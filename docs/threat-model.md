@@ -1,15 +1,19 @@
 # Threat model: the web view and the event log
 
-**Status:** living document, current as of v0.7.0. Decisions are recorded in
+**Status:** living document, current as of v0.8.0-dev. Decisions are recorded in
 [ADR-0018](adr/0018-web-widget-is-a-read-only-view-of-the-event-log.md) (the
 read-only view), [ADR-0021](adr/0021-service-auth-is-a-bearer-token.md) (auth,
-transport, rate limiting) and [ADR-0023](adr/0023-the-web-ui-can-run-an-agent.md)
-(the opt-in chat write path).
+transport, rate limiting), [ADR-0023](adr/0023-the-web-ui-can-run-an-agent.md)
+(the opt-in chat write path) and
+[ADR-0028](adr/0028-a-chat-ui-can-drive-the-agent-over-v1.md)
+(the opt-in OpenAI-compatible `/v1` surface for LibreChat).
 
 **Scope.** `harness serve` (FastAPI + SSE), the SQLite event log it reads, the
-opt-in chat write path (`--manifest`), and the bearer token that guards both. Out of scope: the model gateway, tool
-implementations, the host OS, and any other exporter (Langfuse, MLflow). Those
-have their own data flows and are named in the non-claims below.
+opt-in chat write path (`--manifest`), the opt-in OpenAI-compatible surface
+(`--openai-api`), and the bearer token that guards all of them. Out of scope: the
+model gateway, tool implementations, the host OS, and any other exporter
+(Langfuse, MLflow). Those have their own data flows and are named in the
+non-claims below.
 
 This document is written to be read by a reviewer who has to sign something. It
 states what the code does, what it deliberately does not do, and what the
@@ -56,6 +60,22 @@ writer is the agent loop; the chat endpoint starts a `run_agent`, it does not
 write run state itself. The browser sends a prompt and an approval verdict, never
 run data, and cannot edit the log.
 
+With `--openai-api` there is a second write path, and it usually crosses a
+container boundary:
+
+```
+LibreChat container ──HTTP (token, X-Conversation-Id)──▶ harness :8000 /v1
+        │                                                       │
+   LibreChat's own MongoDB                                one run_agent turn
+   (the client's history)                                       │
+        └────────────────── the agent's answer ◀─────────────────┘
+```
+
+The request body is the client's conversation, not the log's. That is the
+OpenAI contract and the deliberate difference from the page (ADR-0028). The
+destination port is a write path: a holder of the token can start a run, and
+there is no `/v1` route that approves a side-effecting tool.
+
 ---
 
 ## 2. Actors and trust boundaries
@@ -91,6 +111,7 @@ loopback by default, which is safe only because it does not leave the host.
 | T12 | Token has no expiry or revocation | Rotation is a restart with a comma-separated list (`old,new`) | No per-token expiry, no revocation list, no session concept |
 | T14 | The chat write path spends money or runs tools without the operator | Opt-in (`--manifest`); token required even on loopback; one turn at a time per session (`409`); the loop's `ApprovalPolicy` still gates every side-effecting tool, and `WebApproval` only carries the page's answer | A holder of the token can start runs by design; there is no per-user quota. The demo DB's `refund_order` records intent and `submit_basket` records an unpaid, unshipped order — neither moves money or stock |
 | T13 | No record of **who** read what | The service logs nothing by default; the proxy can log requests | No per-user audit trail. A regulated deployment needs OIDC + audit (see §7) |
+| T16 | The OpenAI-compatible surface runs the agent for anyone who can reach the port | Opt-in (`--openai-api`); token mandatory even on loopback; same limiter; `AutoDenyApproval` so a side-effecting tool cannot execute (ADR-0028); one turn per conversation | No approvals from that UI means no consequential action, but it also means the demo cannot show one. The token is shared (no per-user identity), and the client's `messages` array — not the log — is the `/v1` conversation |
 | T15 | The sentinel map leaks, re-identifying a transcript | The map lives in a process-scoped `SentinelStore`, keyed by session, bounded by a TTL and a session cap; never written to the log, never persisted, not returned in `RunResult` (ADR-0025/0026); `redact_event` still redacts the boundary | A core dump, debugger, or a `print` re-identifies everything the live session covered — now up to an hour of a conversation rather than one turn. Opt-in and weaker than `[REDACTED]`; do not enable it on data you would not store |
 
 ---
@@ -274,7 +295,7 @@ holding confidential data either way.
 ## 8. Verification commands
 
 ```bash
-make check                       # 204 offline tests: auth, headers, limiter, redaction, chat
+make check                       # 373 offline tests: auth, headers, limiter, redaction, chat, /v1
 make test-browser                # the page renders under the CSP, and a turn is approved
 uv run pytest tests/test_service_proxy.py   # XFF trusted vs untrusted peer
 
