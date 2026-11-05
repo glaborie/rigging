@@ -12,6 +12,7 @@ tooling under `redteam/`, the way `scripts/bench.py` is.
 
 ```
 redteam/
+  README.md                    the in-folder map: files, commands, provider contract
   provider.py                  promptfoo Python provider: one turn, then the facts
   controls.yaml                known-good cases — run these first
   promptfooconfig.yaml         unattended posture: nothing may run unapproved
