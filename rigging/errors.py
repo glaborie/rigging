@@ -32,5 +32,16 @@ class TransportError(RiggingError):
         super().__init__(f"gateway error status={status} attempts={attempts}: {body[:300]}")
 
 
+class ExporterConfigError(RiggingError):
+    """An exporter cannot work as configured: no backend, no target experiment.
+
+    Raised while exporters are *assembled*, before the run starts. The running
+    loop deliberately swallows exporter errors so observability can never fail a
+    run (ADR-0012); the cost of that is a misconfigured exporter recording
+    nothing and reporting success. This error is the other half of the bargain:
+    configuration that cannot possibly work fails before the first model call.
+    """
+
+
 # The loop returns a `RunResult` for denial, budget exhaustion and gateway
 # failure; it does not raise. Only errors a caller must handle stay here.

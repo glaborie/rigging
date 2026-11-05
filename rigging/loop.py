@@ -119,14 +119,17 @@ def _generation_output(response: ModelResponse) -> Any:
 
 
 def _trace_tags() -> dict[str, Any]:
-    """`RIGGING_TRACE_TAGS` → Langfuse trace tags, for filtering a run in the UI.
+    """`RIGGING_TRACE_TAGS` → trace tags, for filtering a run in the UI.
 
     Tags are labels, not content: they are not gated by `capture_content`.
     Langfuse reads `langfuse.trace.tags` (string[]) on any span of the trace;
-    setting it on the root keeps it to one place.
+    setting it on the root keeps it to one place. `rigging.trace_tags` carries
+    the same comma-joined value for exporters that tag string-to-string (MLflow).
     """
     tags = [t.strip() for t in settings.trace_tags.split(",") if t.strip()]
-    return {"langfuse.trace.tags": tags} if tags else {}
+    if not tags:
+        return {}
+    return {"langfuse.trace.tags": tags, "rigging.trace_tags": ",".join(tags)}
 
 
 def _tool_attributes(tools: set[str]) -> dict[str, Any]:

@@ -16,6 +16,7 @@ from typing import Any
 
 from rigging import __version__
 from rigging.config import settings
+from rigging.errors import RiggingError
 from rigging.events import EventLog
 from rigging.manifest import AgentSpec, load_manifest
 from rigging.registry import DEFAULT_REGISTRY
@@ -436,7 +437,13 @@ HANDLERS = {
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    return HANDLERS[args.command](args)
+    try:
+        return HANDLERS[args.command](args)
+    except RiggingError as exc:
+        # Configuration errors (unknown capability, unreachable exporter target)
+        # are the caller's problem, not a crash: one line, exit 2, no traceback.
+        print(f"harness {args.command}: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

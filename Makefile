@@ -4,7 +4,7 @@
 #   MANIFEST=examples/hello/agent.yaml     which agent to run (make web defaults to b2b-support)
 #   PROMPT="..."                           the user message
 #   MODEL=qwen3:8b                         override the manifest's model
-#   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT=langfuse)
+#   EXPORT=langfuse                        also emit traces (repeatable; e.g. EXPORT="langfuse mlflow")
 #   APPROVE=0|1                            allow side-effecting tools without asking (demo only)
 #   DB=other.db                            alternate SQLite event log
 #
@@ -25,6 +25,8 @@ EXPORT   ?=
 HELLO_MODEL ?= freellm/codestral   # proven live through OmniRoute -> freellmapi
 DB       ?=
 APPROVE  ?= 0
+# `EXPORT="langfuse mlflow"` -> `--export langfuse --export mlflow` (repeatable flag).
+EXPORT_ARGS = $(foreach e,$(EXPORT),--export $(e))
 
 .DELETE_ON_ERROR:
 .PHONY: help install check test lint typecheck format gateway observability \
@@ -120,7 +122,7 @@ hello: ## v0.1 smoke test: one prompt, no tools (proven end-to-end; see examples
 run: ## run any agent: make run MANIFEST=examples/b2b-support/agent.yaml PROMPT="..."
 	uv run harness run $(MANIFEST) "$(PROMPT)" $(if $(MODEL),--model $(MODEL),) \
 	  $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),) \
+	  $(EXPORT_ARGS) \
 	  $(if $(DB),--db $(DB),) $(if $(filter 1,$(APPROVE)),--yes,)
 
 record: ## re-record docs/demo.cast + docs/demo.gif (needs host Ollama + ffmpeg)
@@ -139,7 +141,7 @@ web: ## chat in the browser, b2b agent by default (needs RIGGING_SERVICE_TOKEN)
 chat: ## interactive REPL: make chat MANIFEST=examples/hello/agent.yaml
 	uv run harness chat $(MANIFEST) $(if $(DB),--db $(DB),) $(if $(SESSION),--session $(SESSION),) \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),)
+	  $(EXPORT_ARGS)
 
 seed: ## build the demo fixture DB: products, orders, policy chunks (deterministic)
 	uv run python examples/b2b-support/seed.py
@@ -150,10 +152,11 @@ index: ## (re)build the retrieval index: no-op for fts5 (seed does it), embeds f
 demo: ## run the canonical b2b-support agent (needs the seeded demo.db: make seed)
 	uv run harness run examples/b2b-support/agent.yaml "$(PROMPT)" \
 	  $(if $(MODEL),--model $(MODEL),) $(if $(PROFILE),--profile $(PROFILE),) \
-	  $(if $(EXPORT),--export $(EXPORT),) $(if $(filter 1,$(APPROVE)),--yes,)
+	  $(EXPORT_ARGS) $(if $(filter 1,$(APPROVE)),--yes,)
 
 eval: ## run the b2b-support eval suite: make eval [SUITE=...] [EXPORT=langfuse] [PROFILE=ollama]
-	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(if $(EXPORT),--export $(EXPORT),) $(if $(PROFILE),--profile $(PROFILE),)
+	uv run harness eval $(or $(SUITE),examples/b2b-support/eval.yaml) $(if $(MODEL),--model $(MODEL),) $(EXPORT_ARGS) $(if $(PROFILE),--profile $(PROFILE),)
+
 
 up: gateway ## alias for `make gateway`
 

@@ -153,6 +153,13 @@ overlays the list at assembly time, so the shared demo manifest stays key-free a
 case — the loop treats a broken exporter as non-fatal, so the run succeeds with
 no spans — while missing `LANGFUSE_*` keys fail at assembly.
 
+"Non-fatal during the run" is not "non-fatal always": an exporter whose *target*
+cannot work is refused at assembly, before the first model call. The MLflow
+factory resolves `MLFLOW_EXPERIMENT_ID` against the tracking server and raises
+`ExporterConfigError` when the experiment is missing, deleted or unreachable
+(ADR-0020 postscript). Otherwise the `runs/create` error would happen mid-run,
+where the loop swallows it, and a benchmark would spend hours recording nothing.
+
 The two backends see different shapes, on purpose (ADR-0020). Langfuse ingests
 spans. MLflow tracks runs, so `MLflowExporter` maps one rigging run to one MLflow
 run: the root span creates it, child spans are aggregated into metrics
