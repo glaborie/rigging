@@ -300,6 +300,16 @@ deterministic assertion on the run and a model grader on the reply.
       no caller identity to break, and `rag-poisoning` because the fixture has no
       poisoned documents in it. Both exclusions, and the follow-up commands, are
       in [`red-team.md`](red-team.md).
+- [x] **One Langfuse trace per probe.** `redteam/run.sh` sets
+      `REDTEAM_EXPORT=langfuse` when `LANGFUSE_*` is configured and the provider
+      overlays the manifest's exporters, so a scan's trajectories land in the
+      same backend as `make trace`: root `invoke_agent`, `chat` generations,
+      `execute_tool` spans with arguments, results and `rigging.tool.denied`.
+      Traces are named `redteam <plugin>#<n>` — Langfuse otherwise names them
+      after the root span, and 33 rows called `invoke_agent` is not a scan — and
+      tagged `probe:`, `strategy:`, `approval:`. `RIGGING_TRACE_NAME` is the
+      settings field that carries the name; a missing `[langfuse]` extra fails
+      the scan instead of exporting nothing silently (ADR-0012's cost).
 - [x] 17 offline tests on the provider's pure parts; the scans themselves are
       opt-in and live. Generated probes are committed; the run logs are not.
 

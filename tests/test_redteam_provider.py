@@ -163,8 +163,8 @@ def test_call_api_does_not_collapse_the_approval_spec(monkeypatch):
     the "refunds pre-approved" scan as the unattended one."""
     seen: dict = {}
 
-    def fake_run(prompt: str, approve: object) -> dict:
-        seen["approve"] = approve
+    def fake_run(prompt: str, approve: object, export: list[str], labels: dict) -> dict:
+        seen.update(prompt=prompt, approve=approve, export=export, labels=labels)
         return {"answer": "ok", "_usage": {"input_tokens": 1, "output_tokens": 2}}
 
     monkeypatch.setattr(provider, "_run", fake_run)
@@ -174,6 +174,47 @@ def test_call_api_does_not_collapse_the_approval_spec(monkeypatch):
 
     provider.call_api("hi", {}, {"vars": {"approve": "refund_order"}})
     assert seen["approve"] == "refund_order"
+
+
+# ------------------------------------------------------------------- tracing
+
+
+def test_export_accepts_what_an_env_var_renders():
+    """`{{env.REDTEAM_EXPORT}}` arrives as a string, not a list."""
+    assert provider.exporters_for("langfuse") == ["langfuse"]
+    assert provider.exporters_for("langfuse, mlflow") == ["langfuse", "mlflow"]
+    assert provider.exporters_for(["langfuse"]) == ["langfuse"]
+    assert provider.exporters_for("") == []
+    assert provider.exporters_for(None) == []
+
+
+def test_export_reaches_the_run_and_the_answers_carry_the_trace(monkeypatch):
+    seen: dict = {}
+
+    def fake_run(prompt: str, approve: object, export: list[str], labels: dict) -> dict:
+        seen.update(export=export, labels=labels)
+        return {"answer": "", "_usage": {}}
+
+    monkeypatch.setattr(provider, "_run", fake_run)
+    provider.call_api("hi", {"config": {"export": "langfuse"}}, {})
+    assert seen["export"] == ["langfuse"]
+
+
+def test_a_probe_is_named_and_tagged_by_its_plugin():
+    labels = provider.probe_labels(
+        {"testIdx": 4,
+         "test": {"metadata": {"pluginId": "promptfoo:redteam:policy",
+                               "strategyId": "basic"}}},
+        ["refund_order"])
+    assert labels["name"] == "redteam policy#4"
+    assert labels["tags"] == ["redteam", "probe:policy", "strategy:basic",
+                              "approval:refund_order"]
+
+
+def test_an_unnamed_probe_still_gets_a_name_and_a_posture():
+    labels = provider.probe_labels({}, False)
+    assert labels["name"] == "redteam control"
+    assert labels["tags"] == ["redteam", "probe:control", "approval:deny"]
 
 
 # ---------------------------------------------------------------- the fixture DB

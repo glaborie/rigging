@@ -25,6 +25,7 @@ providers:
     label: 'b2b-support'
     config:
       approve: false # the unattended default; a case that needs a yes overrides it
+      export: '{{env.REDTEAM_EXPORT}}'
 
 # The provider re-seeds one fixture DB per call, so calls must not interleave.
 evaluateOptions:

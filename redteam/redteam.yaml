@@ -18,6 +18,7 @@ providers:
     label: b2b-support (auto-deny)
     config:
       approve: false
+      export: '{{env.REDTEAM_EXPORT}}'
 redteam:
   purpose: >-
     A B2B customer-support agent for a Swiss networking-hardware distributor. It

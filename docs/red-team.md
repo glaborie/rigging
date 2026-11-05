@@ -136,6 +136,12 @@ agent runs behind `harness run` and `harness eval`. Three custom `policy` plugin
   because it is the argument this repository already makes: a model grader can fail
   without saying anything false about the target, which is why the eval predicates
   in `rigging/eval.py` are deterministic (ADR-0009, ADR-0017).
+- **The score is not reproducible to the probe.** Re-running the `pii:direct`
+  probe that passed in this scan produced a `PIILeak` failure on one pass and a
+  pass on the next, on the same refusal ("I can't reveal or reverse customer
+  identifiers"). Model grading is nondeterministic; the deterministic assertion
+  beside it was green every time. Read a per-probe failure as a prompt to look at
+  the transcript, not as a verdict on its own.
 
 What the scans do **not** prove is equally worth stating. Only 11 of 18 probes (7
 of 15 in the approved scan) called any tool at all, and *none* of them called
@@ -146,6 +152,51 @@ the refund. The guardrails' enforcement is evidenced by the controls above, wher
 an approved in-window refund really executed and wrote `orders.note`, and by the
 eval suite. A scan cannot force a tool call; a scripted approval and a specific
 prompt can, and that is what `controls.yaml` is.
+
+## Trajectories in Langfuse
+
+`redteam/run.sh` sets `REDTEAM_EXPORT=langfuse` whenever `LANGFUSE_PUBLIC_KEY` and
+`LANGFUSE_SECRET_KEY` are in `.env` (`REDTEAM_EXPORT= redteam/run.sh scan` turns it
+off), and the provider overlays the demo manifest's `observability.exporters` for
+that run — so the shared manifest stays key-free, exactly as `EXPORT=` works for
+`make demo`. One probe becomes one trace:
+
+```
+redteam pii:direct#0            root:  invoke_agent
+  tags: redteam, probe:pii:direct, approval:deny
+                                 child: chat (model request/response, tokens, cost)
+                                 child: execute_tool lookup_order
+                                        gen_ai.tool.name, arguments, result,
+                                        rigging.tool.denied=false
+```
+
+- **The name** is `redteam <plugin>#<index>` (`langfuse.trace.name`). Langfuse
+  otherwise names a trace after its root span, which is `invoke_agent` for every
+  run in this harness — a 33-probe scan would be 33 identical rows.
+  Hand-written controls have no plugin id and are named `redteam control#<n>`.
+- **The tags** (`langfuse.trace.tags`) come from promptfoo's own metadata:
+  `probe:<plugin>`, `strategy:<strategy>`, `approval:<deny|all|refund_order>`.
+  Filtering `approval:deny` is "the unattended posture"; `probe:` is "one
+  plugin's probes across scans".
+- **The spans** are the harness's existing ones — the same `chat` /
+  `execute_tool` spans `make trace` prints. A tool call that the approval policy
+  refused is in the trace with `rigging.tool.denied=true` and `is_error`, so the
+  trace and the provider's `denied` list agree.
+- **The facts carry the same labels** (`"trace": {"name": ..., "tags": [...]}`), so
+  a failing row in promptfoo's own results says where to look.
+
+Two guards, both from things that already went wrong in this repo:
+
+- `run.sh` refuses to start when `REDTEAM_EXPORT` is set and the `[langfuse]` extra
+  is missing (`uv sync --extra dev --extra langfuse`). The loop swallows exporter
+  errors by design (ADR-0012) — a scan without the extra would export nothing and
+  report success.
+- The exporter is closed on every exit path, so a probe that ends `denied` or
+  `error` still flushes its spans.
+
+Promptfoo's own Langfuse integration is not this: per its documentation it serves
+`langfuse://` prompt management, not trace export. The harness already has the
+OTLP path, and it is the only one carrying tool spans and outcomes.
 
 ## Deliberately not covered
 

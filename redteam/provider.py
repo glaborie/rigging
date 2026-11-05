@@ -15,6 +15,11 @@ promptfoo's assertions then judge `executed` / `writes` / `emails_in_answer`,
 which no amount of persuasion can fake, while its model graders judge the answer
 text, which is the only part a customer sees.
 
+With `export: langfuse`, each probe also becomes one Langfuse trace: the root
+`invoke_agent` span plus the model and tool spans the harness already emits, named
+`redteam <plugin>#<n>` and tagged with the plugin, the strategy and the approval
+posture — so a scan is a filterable list instead of 18 rows called `invoke_agent`.
+
 Loaded by promptfoo's Python provider protocol (`file://provider.py`). That
 protocol speaks JSON over stdin/stdout, so nothing here may print to stdout —
 `call_api` redirects it to stderr for the whole turn.
@@ -202,6 +207,41 @@ def _truthy(value: Any) -> bool:
     return bool(value)
 
 
+def exporters_for(value: Any) -> list[str]:
+    """`export: langfuse` (or a list) → the manifest's `observability.exporters`.
+
+    `{{env.REDTEAM_EXPORT}}` renders to a string, which is why a comma-or-space
+    separated form is accepted as well as a YAML list. Empty means "no traces",
+    which is the default: a scan without Langfuse keys must still run.
+    """
+    if value is None or value is False:
+        return []
+    if isinstance(value, str):
+        return [part for part in re.split(r"[,\s]+", value.strip()) if part]
+    if isinstance(value, (list, tuple)):
+        return [str(item).strip() for item in value if str(item).strip()]
+    return []
+
+
+def require_exporters(export: list[str]) -> None:
+    """Fail before the run when the extra a requested exporter needs is missing.
+
+    The loop swallows exporter errors on purpose (ADR-0012): an observability
+    backend must never fail a run. The cost is that a missing `[langfuse]` extra
+    records nothing and reports success, which for a scan means 18 probes and no
+    traces. This is the loud half of that bargain — same reasoning as the MLflow
+    target check.
+    """
+    if "langfuse" in export:
+        try:
+            import opentelemetry.sdk.trace  # noqa: F401 - the import is the check
+        except ModuleNotFoundError as exc:
+            raise RuntimeError(
+                "export: langfuse needs the [langfuse] extra "
+                "(uv sync --extra dev --extra langfuse): without it the loop skips "
+                "spans silently and the scan exports nothing") from exc
+
+
 def approval_for(value: Any) -> Any:
     """Turn the config's `approve` into an approval policy.
 
@@ -223,21 +263,72 @@ def approval_for(value: Any) -> Any:
     return ScriptedApproval(lambda call: call.name in allowed)
 
 
-def _run(prompt: str, approve: Any) -> dict[str, Any]:
+def _approval_tag(value: Any) -> str:
+    """`deny`, `all`, or the tool names — one tag, no commas."""
+    if _truthy(value):
+        return "all"
+    if value is None or isinstance(value, bool):
+        return "deny"
+    names = [value] if isinstance(value, str) else list(value)
+    return "+".join(str(name) for name in names) or "deny"
+
+
+def probe_labels(context: dict[str, Any], approve: Any) -> dict[str, Any]:
+    """The trace name and tags for one probe: how it is found in Langfuse later.
+
+    `pluginId` and `strategyId` come from promptfoo's metadata for the generated
+    test; `testIdx` keeps two probes of the same plugin apart in a list. The name
+    is what makes a scan readable — otherwise every trace is called
+    `invoke_agent`.
+    """
+    test = (context or {}).get("test") or {}
+    metadata = test.get("metadata") or {}
+    # A generated probe carries `pluginId`; a hand-written control has none, and
+    # "redteam control#2" is a better name for it than "redteam probe#2".
+    plugin = str(metadata.get("pluginId") or "control").replace("promptfoo:redteam:", "")
+    plugin = plugin or "probe"
+    strategy = str(metadata.get("strategyId") or "").strip()
+    index = (context or {}).get("testIdx")
+    suffix = f"#{index}" if isinstance(index, int) else ""
+    tags = ["redteam", f"probe:{plugin}"]
+    if strategy:
+        tags.append(f"strategy:{strategy}")
+    tags.append(f"approval:{_approval_tag(approve)}")
+    return {"name": f"redteam {plugin}{suffix}", "tags": tags}
+
+
+def _run(prompt: str, approve: Any, export: list[str],
+         labels: dict[str, Any]) -> dict[str, Any]:
     from rigging.config import settings
     from rigging.events import EventLog
     from rigging.loop import run_agent
     from rigging.manifest import load_manifest
+
+    require_exporters(export)
 
     # `refund_window` reads this at assembly time, so it has to be set before
     # `run_agent` builds the agent, not after.
     os.environ["RIGGING_DEMO_DB"] = str(prepare_db())
     before = snapshot(RUN_DB)
 
-    with EventLog(EVENTS_DB) as log:
-        result = run_agent(load_manifest(str(MANIFEST)), prompt, log=log,
-                           approval=approval_for(approve))
-        events = list(log.events(result.run_id))
+    spec = load_manifest(str(MANIFEST))
+    if export:
+        spec = spec.model_copy(update={
+            "observability": spec.observability.model_copy(update={"exporters": export})})
+
+    # Trace name and tags are read by `loop._trace_tags` / `_trace_name` while the
+    # root span is built, and `Settings` is process-wide while a scan is many
+    # probes in one worker — so put back what was there.
+    previous = (settings.trace_tags, settings.trace_name)
+    if export:
+        settings.trace_tags = ",".join(labels["tags"])
+        settings.trace_name = labels["name"]
+    try:
+        with EventLog(EVENTS_DB) as log:
+            result = run_agent(spec, prompt, log=log, approval=approval_for(approve))
+            events = list(log.events(result.run_id))
+    finally:
+        settings.trace_tags, settings.trace_name = previous
 
     after = snapshot(RUN_DB)
     folded = facts(events)
@@ -256,6 +347,9 @@ def _run(prompt: str, approve: Any) -> dict[str, Any]:
         "cost_usd": result.cost_usd,
         "run_id": result.run_id,
         "error": result.error,
+        # Where to look when a probe fails: the trace name and tags are what the
+        # scan set on the root span, not something reconstructed after the fact.
+        "trace": {"exporters": export, **labels},
         # Not part of the JSON output: promptfoo's own fields carry these.
         "_usage": {**result.usage.model_dump(), "requests": max(1, result.steps)},
     }
@@ -275,11 +369,13 @@ def call_api(prompt: str, options: dict[str, Any], context: dict[str, Any]) -> d
     # and collapsing it to a bool would silently turn the "refunds pre-approved"
     # scan into the unattended one.
     approve = variables.get("approve", config.get("approve", False))
+    export = exporters_for(variables.get("export", config.get("export", "")))
+    labels = probe_labels(context, approve)
 
     try:
         # The protocol owns stdout; a stray print corrupts it.
         with contextlib.redirect_stdout(sys.stderr):
-            payload = _run(prompt, approve)
+            payload = _run(prompt, approve, export, labels)
     except Exception as exc:  # promptfoo wants a message, not a traceback
         return {"error": f"{type(exc).__name__}: {exc}"}
 

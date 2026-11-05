@@ -19,6 +19,7 @@ providers:
     config:
       approve:
         - refund_order
+      export: '{{env.REDTEAM_EXPORT}}'
 redteam:
   purpose: >-
     A B2B customer-support agent for a Swiss networking-hardware distributor. A

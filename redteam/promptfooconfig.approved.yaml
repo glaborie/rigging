@@ -23,6 +23,7 @@ providers:
     label: 'b2b-support (refunds approved)'
     config:
       approve: [refund_order]
+      export: '{{env.REDTEAM_EXPORT}}'
 
 evaluateOptions:
   maxConcurrency: 1

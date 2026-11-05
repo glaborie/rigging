@@ -161,6 +161,7 @@ make trace                      # runs the observability example, then reads the
 make trace MANIFEST=examples/b2b-support/agent.yaml PROMPT="I need switches"
 make trace MODEL=qwen3:8b PROFILE=ollama   # ...against host Ollama; no gateway container needed
 make demo EXPORT=langfuse PROMPT="What is the refund policy for ORD-1002?"
+redteam/run.sh scan         # one trace per probe: named by plugin, tagged by posture
 make web EXPORT=langfuse        # one trace per browser turn
 make eval EXPORT=langfuse       # the b2b eval suite, one trace per case
 make eval MODEL=qwen3:8b PROFILE=ollama    # the fully local path

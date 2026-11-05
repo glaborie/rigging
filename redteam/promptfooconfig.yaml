@@ -29,6 +29,10 @@ providers:
     label: 'b2b-support (auto-deny)'
     config:
       approve: false
+      # One Langfuse trace per probe (root invoke_agent + model/tool spans),
+      # named and tagged per probe. Empty disables it; `run.sh` sets langfuse
+      # when LANGFUSE_* keys are present.
+      export: '{{env.REDTEAM_EXPORT}}'
 
 # The provider re-seeds one fixture DB per call, so calls must not interleave.
 evaluateOptions:

@@ -15,6 +15,9 @@
 # Two things this pins that a bare `npx promptfoo` would get wrong:
 #   * the Python worker must be the project venv, or the provider cannot import
 #     `rigging`;
+#   * one Langfuse trace per probe when LANGFUSE_* is configured (see the
+#     REDTEAM_EXPORT block below), core traces from the same exporter as `make
+#     trace`;
 #   * results stay local: `redteam run` only uploads when you ask it to
 #     (`promptfoo share`), and the controls eval passes `--no-share` explicitly.
 set -euo pipefail
@@ -43,6 +46,21 @@ if [ -f .env ]; then
   . ./.env
   set +a
 fi
+
+# Trajectories: one Langfuse trace per probe, when this machine can send them.
+# `REDTEAM_EXPORT=` (empty) disables it; anything else is passed to the provider,
+# which overlays the manifest's exporters (the shared manifest stays key-free).
+if [ -n "${LANGFUSE_PUBLIC_KEY:-}" ] && [ -n "${LANGFUSE_SECRET_KEY:-}" ]; then
+  export REDTEAM_EXPORT="${REDTEAM_EXPORT-langfuse}"
+else
+  export REDTEAM_EXPORT="${REDTEAM_EXPORT:-}"
+fi
+if [ -n "$REDTEAM_EXPORT" ] && ! .venv/bin/python -c "import opentelemetry.sdk.trace" 2>/dev/null; then
+  echo "redteam: REDTEAM_EXPORT=$REDTEAM_EXPORT needs the [langfuse] extra:" >&2
+  echo "         uv sync --extra dev --extra langfuse   (or run with REDTEAM_EXPORT= )" >&2
+  exit 2
+fi
+echo "redteam: traces -> ${REDTEAM_EXPORT:-none}" >&2
 
 mode="${1:-controls}"
 shift || true
