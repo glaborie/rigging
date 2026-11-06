@@ -1,9 +1,28 @@
 name: ci
 
+# Run only when something the suite can actually verify changed. The tests load
+# files from examples/ (test_cli, test_eval, test_demo, test_manifest), scripts/
+# (test_atif, test_bench, test_seal_pii) and redteam/ (test_redteam_provider), so
+# those count as code. Docs, ADRs and top-level markdown do not: a README edit
+# needs no ruff, no mypy and no Chromium.
+#
+# Add a path here when a new directory becomes part of what CI loads; the
+# allowlist means an unlisted one is silently untested.
 on:
   push:
     branches: [main]
+    paths: &paths
+      - "rigging/**"
+      - "tests/**"
+      - "examples/**"
+      - "scripts/**"
+      - "redteam/**"
+      - "pyproject.toml"
+      - "uv.lock"
+      - "Makefile"
+      - ".github/workflows/**"
   pull_request:
+    paths: *paths
 
 permissions:
   contents: read
