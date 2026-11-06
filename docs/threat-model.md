@@ -113,6 +113,7 @@ loopback by default, which is safe only because it does not leave the host.
 | T13 | No record of **who** read what | The service logs nothing by default; the proxy can log requests | No per-user audit trail. A regulated deployment needs OIDC + audit (see §7) |
 | T16 | The OpenAI-compatible surface runs the agent for anyone who can reach the port | Opt-in (`--openai-api`); token mandatory even on loopback; same limiter; `AutoDenyApproval` so a side-effecting tool cannot execute (ADR-0028); one turn per conversation | No approvals from that UI means no consequential action, but it also means the demo cannot show one. The token is shared (no per-user identity), and the client's `messages` array — not the log — is the `/v1` conversation |
 | T15 | The sentinel map leaks, re-identifying a transcript | The map lives in a process-scoped `SentinelStore`, keyed by session, bounded by a TTL and a session cap; never written to the log, never persisted, not returned in `RunResult` (ADR-0025/0026); `redact_event` still redacts the boundary | A core dump, debugger, or a `print` re-identifies everything the live session covered — now up to an hour of a conversation rather than one turn. Opt-in and weaker than `[REDACTED]`; do not enable it on data you would not store |
+| T17 | A parked approval releases a side effect hours later, answered by whoever holds the token | Answerable once (`BEGIN IMMEDIATE` in `EventLog.decide_approval`); bound to a SHA-256 digest of the proposal, so an edited request cannot be approved; `RIGGING_APPROVAL_TTL_S` (default 24h) denies on resume even when the caller says yes; the label and the note are recorded in `approval_verdict` | The token is a shared secret, not an identity: any holder can answer, and `approver` is self-declared. A run can sit `pending_approval` indefinitely — the TTL only acts when someone resumes it, so an unanswered queue is a real operational state (`harness approvals` shows its age) |
 
 ---
 
@@ -128,9 +129,13 @@ loopback by default, which is safe only because it does not leave the host.
 | Read-only database | `_connect` (`mode=ro`) | `test_the_service_never_writes` |
 | Redaction before insert | `rigging/redact.py` | `test_redact.py` (asserts on the DB file) |
 | Sentinels never reach the log | `guardrails/pii.py` (ADR-0025) | `test_pseudonymise.py::test_the_model_and_the_log_never_see_the_value` |
-| No write/launch/approve route without a manifest | route list is six GETs | `test_the_service_never_writes` |
+| No write/launch/approve route without a manifest | route list is seven GETs | `test_the_service_never_writes` |
 | Chat refuses to exist without a token | `create_app` guard | `test_chat_refuses_to_exist_without_a_token` |
 | Approval is answered by the loop's policy, not the page | `service/chat.py::WebApproval` | `test_approval_is_answered_from_the_page`, `test_denied_approval_blocks_the_tool` |
+| A deferred approval never runs its tool | `loop._prepare_call` → `_suspend` | `test_approval_lifecycle.py::test_a_deferred_approval_stops_before_the_tool_runs` |
+| One approval, one verdict | `EventLog.decide_approval` | `test_approval_lifecycle.py::test_one_approval_gets_one_verdict` |
+| An edited request cannot be approved | digest check in `resume_run` | `test_approval_lifecycle.py::test_an_edited_request_cannot_turn_into_another_approval` |
+| Silence denies, even when the caller said yes | expiry check in `resume_run` | `test_approval_lifecycle.py::test_an_expired_approval_denies_even_when_approved` |
 | The page's write path works in a real browser | `INDEX_HTML` | `test_service_browser.py::test_the_page_can_run_a_turn_and_approve_it` |
 
 `make check` runs all of it offline. `make test-browser` runs the page in

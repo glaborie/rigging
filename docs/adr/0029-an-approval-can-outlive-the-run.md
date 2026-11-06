@@ -1,8 +1,8 @@
 # ADR-0029: An approval can outlive the run that asked for it
 
-**Status:** Proposed — not implemented yet; this page is the sign-off for hard
-rule 6. Amends ADR-0007 (approval is a policy call inside the loop) and ADR-0023
-(the page's approval channel) without repealing either.
+**Status:** Accepted (implemented). Amends ADR-0007 (approval is a policy call
+inside the loop) and ADR-0023 (the page's approval channel) without repealing
+either.
 
 ## Context
 

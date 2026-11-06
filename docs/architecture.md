@@ -92,6 +92,27 @@ Three invariants fall out of this and are enforced by tests:
 Entry-points are discovered automatically during assembly; the list is logged to
 stderr for visibility. To suppress, provide an explicit `Registry`.
 
+### 3.1 An approval that outlives the run (ADR-0029)
+
+The policies above answer inside the loop. `deferred` does not: it raises
+`ApprovalPending`, the loop writes `approval_pending` and ends the run as
+`pending_approval` — **with the tool not executed**, on every path including the
+parallel one. `RunResult.pending` carries the id a human answers with.
+
+`resume_run(spec, run_id, approved=..., approver=...)` rejects an unknown run, a
+subagent, a run that is not suspended, an approval that was already answered, and
+one whose stored arguments no longer match their digest. It records the verdict
+once (`BEGIN IMMEDIATE`, so two clients cannot both win), rebuilds the transcript
+from `log.messages()` plus the system prompt, re-runs `on_tool_call` — the
+post-transform arguments are deliberately not in the log (ADR-0025) — executes
+only the calls with no `tool_result` yet, and re-enters the same step engine at
+`first_step = model calls + 1`. Prior tools are never replayed; that is what the
+feature is for.
+
+An approval past `RIGGING_APPROVAL_TTL_S` (default 24h) denies on resume even if
+the caller said yes. `approver` is a label, not an identity: authority is
+possession of the channel (token or terminal), and no doc claims otherwise.
+
 ## 4. Event log
 
 Append-only. The event log is the source of truth; every other view is a query.
@@ -103,7 +124,8 @@ CREATE TABLE run_events (
   ts          REAL NOT NULL,
   type        TEXT NOT NULL,   -- run_started | input_received | guardrail_verdict
                                -- model_request | model_response | tool_batch
-                               -- tool_call | approval_requested | approval_verdict
+                               -- tool_call | approval_requested | approval_pending
+                               -- approval_verdict | run_resumed
                                -- tool_result | budget_check | escalation
                                -- output_verdict | run_finished | error
                                -- gateway_error | sse_malformed
@@ -122,11 +144,14 @@ CREATE TABLE runs     (run_id TEXT PRIMARY KEY, session_id TEXT, started_at REAL
 Derived views: `messages` (from `input_received`, `model_response`, `tool_result`),
 `verdicts` (from `*_verdict`), `usage` (from `model_response.usage`),
 `escalations` (from `escalation`, joined to its run and session; served by
-`harness escalations` and `GET /api/escalations`), and the replayable transcript
-exported to `runs/<id>.jsonl`.
+`harness escalations` and `GET /api/escalations`), `approvals` (from
+`approval_pending` minus any `approval_verdict` for the same id, on runs still
+`pending_approval`; served by `harness approvals` and `GET /api/approvals`), and
+the replayable transcript exported to `runs/<id>.jsonl`.
 
 `run_finished` is written exactly once on every exit path — `ok`, `denied`,
-`budget_exhausted` and `error` — so the log alone says how a run ended.
+`budget_exhausted`, `pending_approval` and `error` — so the log alone says how a
+run ended.
 
 **The log is a security boundary.** No payload reaches SQLite without passing
 `redact_event()`; a test asserts that a secret-shaped string in a tool result
@@ -188,6 +213,7 @@ For that to be honest, the loop ends the root span on **every** exit path — `o
 | tool exception / bad args | tool message with `is_error: true` |
 | guardrail deny | tool message (tool hook) or `RunResult(status="denied")` (input/output hook) |
 | approval deny | tool message `denied by policy`; the model is told, the user is shown |
+| approval deferred | `RunResult(status="pending_approval")` with `pending.approval_id`; no tool ran, and `resume_run` continues from the log (ADR-0029) |
 | limits reached | one final call with tools disabled; then `RunResult(status="budget_exhausted")` with the partial transcript |
 | empty model answer | one retry with tools disabled; a second empty reply is `RunResult(status="error")`, never `ok` with no output |
 | Ctrl-C | `CancelledError` propagates; partial transcript is already durable |
@@ -248,6 +274,8 @@ need conversation state ignore it.
 | `GET /api/runs/{id}/stream` | SSE: replay, then tail by `seq` until the run ends, goes idle, or hits `timeout` |
 | `POST /api/chat` | *(with `--manifest`)* start one `run_agent`, return `{session_id, run_id}` |
 | `POST /api/runs/{id}/approval` | *(with `--manifest`)* answer a waiting side-effecting tool |
+| `GET /api/approvals` | *(with `--manifest`)* side-effecting calls parked by a `deferred` policy (ADR-0029) |
+| `POST /api/approvals/{approval_id}` | *(with `--manifest`)* approve or deny one, and resume its run |
 | `GET /v1/models` | *(with `--openai-api`)* one model: the agent's name (ADR-0028) |
 | `POST /v1/chat/completions` | *(with `--openai-api`)* the same `run_agent`, in OpenAI's wire format, streamed or not |
 
