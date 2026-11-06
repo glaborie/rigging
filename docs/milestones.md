@@ -330,7 +330,44 @@ deterministic assertion on the run and a model grader on the reply.
       remains the surface that shows an approval as a decision;
       [`librechat.md`](librechat.md) has the wiring and the four ways it fails.
 
-## v0.8 backlog
+## Backlog
+
+Unshipped work, newest ask first within each block. Nothing here is promised for a
+version; each item needs its ADR before code (standing rule 3).
+
+- [ ] **An approval lifecycle: pending → authorized verdict → resume.** Today an
+      approval is a *blocking call inside the run*: `ApprovalPolicy.request()` is
+      called by the loop and the thread waits — the CLI prompt blocks on stdin,
+      `WebApproval` waits up to `APPROVAL_TIMEOUT_S` for the page's POST, and a
+      timeout is a deny. That ties an approval to a live thread, so a reviewer who
+      is not watching at that moment cannot answer, and a restart loses the
+      pending request. The ask: `approval_requested` returns a *pending approval
+      id* to the client and the turn ends; an authorized user then approves or
+      denies it against that id, and the run resumes from the event log at the
+      tool call it stopped on — same session, same messages, no re-execution of
+      prior tools. Requires (a) an approver identity, which the demo deliberately
+      does not have yet, so the ADR must say who may answer and how that is
+      proven; (b) a resume path that reconstructs loop state from `run_events`
+      rather than from memory; (c) a test per path asserting the consequential
+      tool's side effect is absent *before* approval and present only after an
+      approve verdict — never on deny, timeout or a dropped connection. Cost: two
+      durable states (`pending`, `awaiting_resume`) that outlive the process, and
+      an authorisation surface that did not exist before.
+
+- [ ] **Opt-in agent memory as a swappable protocol with retention and privacy
+      controls — or MCP server support.** Two candidates for the same slot, and
+      ADR-0017 says pick one deliberately rather than bolting both on:
+      *memory* would be a new layer behind a protocol (write/read, per-session and
+      per-user scopes) and is where the privacy work already landed — sealed PII
+      (ADR-0027), per-run sentinel maps (ADR-0025/0026) and the redaction boundary
+      all constrain what may be stored and for how long, so retention and deletion
+      are the hard part, not the retrieval. *MCP serving* would invert ADR-0013
+      (consumed, never served) and expose the registry's tools — which are
+      already JSON-Schema described — to another client, at the cost of owning a
+      trust boundary for callers. Either way: opt-in via the manifest, off by
+      default, an event type for every write or served call, and a test asserting
+      the default stores nothing. The ADR must state the retention window, what
+      `harness` can delete, and what it explicitly cannot guarantee.
 
 - [ ] **Streaming tool activity into the UI.** `/v1/chat/completions` returns the
       assistant's text; the tool calls a turn made are only in the event log.
@@ -338,7 +375,8 @@ deterministic assertion on the run and a model grader on the reply.
       allows — a `delta` the client ignores is not that place.
 - [ ] **An approval channel for non-page clients.** `AutoDenyApproval` is the
       honest default for a UI without one. A queue with a POST would let a
-      LibreChat operator answer, at the cost of knowing who is answering.
+      LibreChat operator answer, at the cost of knowing who is answering. This is
+      the narrow version of the lifecycle item above; do not build both.
 
 ## Standing rules
 
