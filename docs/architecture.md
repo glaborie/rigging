@@ -149,9 +149,11 @@ Derived views: `messages` (from `input_received`, `model_response`, `tool_result
 `pending_approval`; served by `harness approvals` and `GET /api/approvals`), and
 the replayable transcript exported to `runs/<id>.jsonl`.
 
-`run_finished` is written exactly once on every exit path — `ok`, `denied`,
-`budget_exhausted`, `pending_approval` and `error` — so the log alone says how a
-run ended.
+`run_finished` is written on every exit path — `ok`, `denied`, `budget_exhausted`,
+`pending_approval` and `error` — so the log alone says how a run ended. A
+suspended run writes one (`pending_approval`) and the resumed run writes another;
+the last one is the run's state, and both stay in the log because two endings
+really did happen (ADR-0029).
 
 **The log is a security boundary.** No payload reaches SQLite without passing
 `redact_event()`; a test asserts that a secret-shaped string in a tool result
