@@ -27,7 +27,9 @@ EventType = Literal[
     "tool_call",
     "tool_batch",
     "approval_requested",
+    "approval_pending",
     "approval_verdict",
+    "run_resumed",
     "tool_result",
     "escalation",
     "output_verdict",
@@ -105,9 +107,50 @@ def project_escalations(conn: sqlite3.Connection, limit: int = 50) -> list[dict[
     return out
 
 
+def project_approvals(conn: sqlite3.Connection, limit: int = 50,
+                      *, now: float | None = None) -> list[dict[str, Any]]:
+    """Approvals waiting for a human, newest first — a queue like escalations.
+
+    A pending approval is an `approval_pending` event with no `approval_verdict`
+    for the same `approval_id`, on a run whose status is still `pending_approval`
+    (ADR-0029). Expired ones are listed, not hidden: a request nobody answered is
+    exactly what an operator needs to see, and the TTL only decides at resume.
+    """
+    limit = max(1, min(int(limit), 200))
+    now = time.time() if now is None else now
+    answered = {
+        json.loads(row["payload"]).get("approval_id")
+        for row in conn.execute("SELECT payload FROM run_events WHERE type='approval_verdict'")
+    }
+    out: list[dict[str, Any]] = []
+    rows = conn.execute(
+        "SELECT e.run_id, e.ts, e.payload, r.session_id, s.title"
+        " FROM run_events e JOIN runs r ON r.run_id = e.run_id"
+        " LEFT JOIN sessions s ON s.session_id = r.session_id"
+        " WHERE e.type = 'approval_pending' AND r.status = 'pending_approval'"
+        " ORDER BY e.ts DESC, e.rowid DESC",
+    )
+    for row in rows:
+        payload = json.loads(row["payload"])
+        if payload.get("approval_id") in answered:
+            continue
+        expires_at = payload.get("expires_at")
+        out.append({
+            **payload,
+            "run_id": row["run_id"],
+            "session_id": row["session_id"],
+            "session_title": row["title"],
+            "created_at": payload.get("created_at") or row["ts"],
+            "age_s": max(0.0, now - float(payload.get("created_at") or row["ts"])),
+            "expired": bool(expires_at is not None and now >= float(expires_at)),
+        })
+        if len(out) >= limit:
+            break
+    return out
+
+
 class EventLog:
     """SQLite-backed append-only log. Every payload passes `redact_event`."""
-
     def __init__(self, path: str | Path = "rigging.db") -> None:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -153,6 +196,14 @@ class EventLog:
 
     def append(self, run_id: str, type_: EventType | str, payload: dict[str, Any],
                *, span_id: str | None = None, parent_run_id: str | None = None) -> int:
+        seq = self._insert(run_id, type_, payload, span_id=span_id,
+                           parent_run_id=parent_run_id)
+        self._db.commit()
+        return seq
+
+    def _insert(self, run_id: str, type_: EventType | str, payload: dict[str, Any],
+                *, span_id: str | None = None, parent_run_id: str | None = None) -> int:
+        """Append without committing, so a caller can hold one transaction."""
         # The in-memory cursor is per instance, and a run can be written by more
         # than one: the web view names a run, then its worker thread opens its own
         # log. Fall back to the log itself before appending a duplicate seq.
@@ -170,7 +221,6 @@ class EventLog:
             (run_id, seq, time.time(), type_, json.dumps(redact_event(payload), default=str),
              span_id, parent_run_id),
         )
-        self._db.commit()
         return seq
 
     def finish_run(self, run_id: str, status: str) -> None:
@@ -236,6 +286,55 @@ class EventLog:
     def escalations(self, *, limit: int = 50) -> list[dict[str, Any]]:
         """Projection: structured handoffs, newest first — the human's queue."""
         return project_escalations(self._db, limit)
+
+    def approvals(self, *, limit: int = 50) -> list[dict[str, Any]]:
+        """Projection: side-effecting calls waiting for a human (ADR-0029)."""
+        return project_approvals(self._db, limit)
+
+    def get_run(self, run_id: str) -> dict[str, Any] | None:
+        row = self._db.execute("SELECT * FROM runs WHERE run_id=?", (run_id,)).fetchone()
+        return dict(row) if row else None
+
+    def pending_approval(self, run_id: str) -> dict[str, Any] | None:
+        """The unanswered `approval_pending` for a run, if there is one."""
+        answered = {
+            ev["payload"].get("approval_id")
+            for ev in self.events(run_id, type_="approval_verdict")
+        }
+        latest: dict[str, Any] | None = None
+        for ev in self.events(run_id, type_="approval_pending"):
+            if ev["payload"].get("approval_id") not in answered:
+                latest = {**ev["payload"], "seq": ev["seq"], "ts": ev["ts"]}
+        return latest
+
+    def decide_approval(self, run_id: str, approval_id: str, *, approved: bool,
+                        approver: str, note: str = "") -> int | None:
+        """Append `approval_verdict` exactly once, under a write lock (ADR-0029).
+
+        Two clients answering the same approval must not both win: the check and
+        the insert share one `BEGIN IMMEDIATE` transaction, so the second returns
+        `None` and the caller reports a conflict instead of executing the tool.
+        """
+        self._db.execute("BEGIN IMMEDIATE")
+        try:
+            for row in self._db.execute(
+                "SELECT payload FROM run_events WHERE run_id=? AND type='approval_verdict'",
+                (run_id,),
+            ):
+                if json.loads(row["payload"]).get("approval_id") == approval_id:
+                    self._db.execute("ROLLBACK")
+                    return None
+            seq = self._insert(run_id, "approval_verdict", {
+                "approval_id": approval_id,
+                "approved": approved,
+                "approver": approver,
+                "note": note,
+            })
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        return seq
 
     def export_jsonl(self, run_id: str, path: str | Path | None = None) -> Path:
         """The replayable transcript. `--replay` consumes exactly this file."""
