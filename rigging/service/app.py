@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 
 from rigging.errors import RiggingError
-from rigging.events import project_escalations
+from rigging.events import project_approvals, project_escalations
 from rigging.service.chat import ChatRunner
 from rigging.service.openai_api import (
     PUBLIC_MESSAGES,
@@ -103,6 +103,12 @@ def escalations(db: str | Path, limit: int = 50) -> list[dict[str, Any]]:
     """Handoffs waiting for a human, newest first — the same projection as the CLI."""
     with closing(_connect(db)) as conn:
         return project_escalations(conn, limit)
+
+
+def approvals(db: str | Path, limit: int = 50) -> list[dict[str, Any]]:
+    """Side-effecting calls waiting for a human (ADR-0029), same as the CLI."""
+    with closing(_connect(db)) as conn:
+        return project_approvals(conn, limit)
 
 
 def _session_running(db: str | Path, session_id: str) -> bool:
@@ -317,6 +323,14 @@ class ApprovalRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class ApprovalDecision(BaseModel):
+    """An answer to a *deferred* approval, from a client that was not there (ADR-0029)."""
+
+    approve: bool
+    approver: str = Field(default="", max_length=120)
+    note: str = Field(default="", max_length=500)
+
+
 def create_app(
     db: str | Path,
     *,
@@ -407,6 +421,10 @@ def create_app(
     def list_escalations(limit: int = 50) -> dict[str, Any]:
         return {"escalations": escalations(db, limit)}
 
+    @app.get("/api/approvals", dependencies=guard)
+    def list_approvals(limit: int = 50) -> dict[str, Any]:
+        return {"approvals": approvals(db, max(1, min(limit, 100)))}
+
     @app.get("/api/config", dependencies=guard)
     def config() -> dict[str, Any]:
         """What the page may do: chat needs a manifest and a token (ADR-0023)."""
@@ -436,6 +454,28 @@ def create_app(
                     status_code=409, detail="no approval is waiting for this run"
                 )
             return {"run_id": run_id, "approved": body.approve}
+
+        @app.post("/api/approvals/{approval_id}", dependencies=guard)
+        def answer_deferred(approval_id: str, body: ApprovalDecision) -> dict[str, Any]:
+            """Answer a parked run and let it continue (ADR-0029).
+
+            The token is the authority here, and `approver` is a label the caller
+            declares: this harness has no accounts and does not claim to.
+            """
+            try:
+                result = runner.answer_deferred(
+                    approval_id, approved=body.approve,
+                    approver=body.approver.strip() or "service",
+                    note=body.note,
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=409, detail="no approval is waiting for this id"
+                ) from None
+            except RiggingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from None
+            return {"run_id": result.run_id, "status": result.status,
+                    "approved": body.approve, "output": result.output}
 
     if bridge is not None:
 

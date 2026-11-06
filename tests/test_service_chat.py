@@ -259,3 +259,39 @@ def test_manifest_auto_deny_is_respected(tmp_path):
     # Nothing was waiting for the page, so there is nothing to answer.
     assert api.post(f"/api/runs/{run_id}/approval", json={"approve": True},
                     headers=AUTH).status_code == 409
+
+
+def test_a_deferred_approval_is_answerable_over_http(tmp_path):
+    """ADR-0029: the client that was not there when the run stopped can answer it."""
+    spec = _spec(tmp_path, approval={"policy": "deferred",
+                                     "side_effecting_tools": ["refund"]})
+    client = FakeClient([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "refund", "arguments": {"amount": 10}}]},
+        {"role": "assistant", "content": "done"},
+    ])
+    api, _ = _app(tmp_path, client, spec=spec)
+    run_id = api.post("/api/chat", json={"prompt": "refund 10"},
+                      headers=AUTH).json()["run_id"]
+
+    _wait(api, run_id, "approval_pending")
+    listing = api.get("/api/approvals", headers=AUTH).json()["approvals"]
+    assert [row["run_id"] for row in listing] == [run_id]
+    approval_id = listing[0]["approval_id"]
+
+    answered = api.post(f"/api/approvals/{approval_id}",
+                        json={"approve": True, "approver": "alice"}, headers=AUTH)
+    assert answered.status_code == 200, answered.text
+    assert answered.json()["status"] == "ok"
+    assert answered.json()["approved"] is True
+
+    events = api.get(f"/api/runs/{run_id}", headers=AUTH).json()["events"]
+    kinds = [e["type"] for e in events]
+    assert kinds.count("run_resumed") == 1
+    assert kinds.count("tool_result") == 1
+    assert api.get("/api/approvals", headers=AUTH).json()["approvals"] == []
+
+    # the same id cannot be answered twice
+    again = api.post(f"/api/approvals/{approval_id}",
+                     json={"approve": True}, headers=AUTH)
+    assert again.status_code == 409
