@@ -8,6 +8,15 @@ name: ci
 #
 # Add a path here when a new directory becomes part of what CI loads; the
 # allowlist means an unlisted one is silently untested.
+#
+# CodeQL is not this workflow. It is GitHub's *default setup* for code scanning
+# (`dynamic/github-code-scanning/codeql`): there is no file for it in this
+# directory, it has no paths filter to edit, and it fires on every pull request.
+# So a docs-only PR shows exactly one check — that CodeQL run, ~35s — and no
+# `ci` run at all. That is the intended state, not a filter that failed to
+# apply. Making CodeQL path-aware would mean switching to advanced setup (a
+# committed `codeql.yml` plus disabling default setup in repository settings)
+# and taking on the workflow's upkeep; the decision was to keep default setup.
 on:
   push:
     branches: [main]
