@@ -1,7 +1,9 @@
 """Approval policies for side-effecting tools (ADR-0007).
 
-Enforcement is the loop's job; these are the three ways to answer the question.
+Enforcement is the loop's job; these are the ways to answer the question.
 `AutoDeny` is the default so an unattended run can never quietly issue a refund.
+`Deferred` does not answer at all: it ends the run as `pending_approval` so a
+human can answer later, from another process (ADR-0029).
 """
 
 from __future__ import annotations
@@ -11,6 +13,19 @@ from collections.abc import Callable
 from typing import Any
 
 from rigging.types import ToolCall
+
+
+class ApprovalPending(Exception):
+    """A `deferred` policy has no answer for this call (ADR-0029).
+
+    Not an error: the loop turns it into `approval_pending` and ends the run in
+    the `pending_approval` status. The tool has not run and cannot have run — the
+    raise happens before `_run_tool` on every path.
+    """
+
+    def __init__(self, call: ToolCall, tool_name: str, reason: str) -> None:
+        self.call, self.tool_name, self.reason = call, tool_name, reason
+        super().__init__(f"{tool_name} needs approval: {reason}")
 
 
 class AutoDenyApproval:
@@ -47,3 +62,16 @@ class ScriptedApproval:
     def request(self, call: ToolCall, tool: Any, reason: str) -> tuple[bool, str]:
         verdict = self._approve(call) if callable(self._approve) else bool(self._approve)
         return verdict, f"scripted approval={verdict}"
+
+
+class DeferredApproval:
+    """Suspend the run instead of answering; a human answers later (ADR-0029).
+
+    The point is that nothing is lost when the process ends: the loop records the
+    call it was about to make, and `resume_run` continues from the log.
+    """
+
+    name = "deferred"
+
+    def request(self, call: ToolCall, tool: Any, reason: str) -> tuple[bool, str]:
+        raise ApprovalPending(call, getattr(tool, "name", call.name), reason)
