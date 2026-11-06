@@ -332,8 +332,10 @@ deterministic assertion on the run and a model grader on the reply.
 
 ## Backlog
 
-Unshipped work, newest ask first within each block. Nothing here is promised for a
-version; each item needs its ADR before code (standing rule 3).
+Unshipped work, grouped by area. Nothing here is promised for a version; each
+item needs its ADR before code (standing rule 3).
+
+### Run control
 
 - [ ] **An approval lifecycle: pending → authorized verdict → resume.** Today an
       approval is a *blocking call inside the run*: `ApprovalPolicy.request()` is
@@ -354,20 +356,78 @@ version; each item needs its ADR before code (standing rule 3).
       durable states (`pending`, `awaiting_resume`) that outlive the process, and
       an authorisation surface that did not exist before.
 
-- [ ] **Opt-in agent memory as a swappable protocol with retention and privacy
-      controls — or MCP server support.** Two candidates for the same slot, and
-      ADR-0017 says pick one deliberately rather than bolting both on:
-      *memory* would be a new layer behind a protocol (write/read, per-session and
-      per-user scopes) and is where the privacy work already landed — sealed PII
-      (ADR-0027), per-run sentinel maps (ADR-0025/0026) and the redaction boundary
-      all constrain what may be stored and for how long, so retention and deletion
-      are the hard part, not the retrieval. *MCP serving* would invert ADR-0013
-      (consumed, never served) and expose the registry's tools — which are
-      already JSON-Schema described — to another client, at the cost of owning a
-      trust boundary for callers. Either way: opt-in via the manifest, off by
-      default, an event type for every write or served call, and a test asserting
-      the default stores nothing. The ADR must state the retention window, what
-      `harness` can delete, and what it explicitly cannot guarantee.
+- [ ] **Explicit run lifecycle and recovery contracts.** Timeouts, retries,
+      cancellation and process restarts are each handled *somewhere* today, and
+      nowhere are they stated as one contract. The client retries 429/5xx and
+      timeouts with capped exponential backoff and jitter (`max_retries=3`), the
+      per-request timeout is `request_timeout_s`, limits carry a wall-clock
+      budget, and a run ends `ok` / `denied` / `budget_exhausted` /
+      output-denied. Missing: a run **state machine** that says which timeout is
+      per request, per tool and per run; **retry semantics** that distinguish a
+      retryable model call from a side-effecting tool call (a retried
+      `refund_order` is a second refund, so retries must be off by default for
+      `side_effecting` tools and the ADR must say why); **cancellation** as a
+      first-class event with a defined safe point — today Ctrl-C kills the
+      process mid-tool and leaves a run in the log that merely stops; and
+      **restart** semantics that name the terminal state of an abandoned run and
+      guarantee the one thing that matters, that a restart never replays a side
+      effect. Tests: cancel signalled between steps starts no further tool;
+      a side-effecting tool is never auto-retried; an abandoned run reads
+      `abandoned` in `harness runs`, not `ok`. Cost: a durable run state column
+      plus migrations, and a cancellation channel threaded through the loop.
+
+### Extensibility
+
+- [ ] **Framework conformance tests for third-party implementations.** A tool,
+      retriever, guardrail, decision model or client can ship in another package
+      and register through the `rigging.tools`, `rigging.guardrails`,
+      `rigging.retrievers` and `rigging.decision_models` entry points, and
+      nothing verifies it. What exists is the built-ins' own tests and
+      `rigging/testing.py`'s `FakeClient`; what is missing is a suite an author
+      can run against *their* class. The ask: a shipped, importable conformance
+      kit (e.g. `rigging.conformance`) that asserts the invariants per protocol —
+      a `Tool` turns bad JSON args, unknown names and exceptions into `is_error`
+      results and never raises; it receives `RunContext`; a `side_effecting`
+      tool is never reachable without an approval policy; a `Retriever` round-trips
+      `index` → `search` deterministically and handles an empty corpus; a
+      `DecisionModel` answers every question it was asked with a probability; an
+      `Exporter` survives `close()` on every exit path; a `Guardrail` returns only
+      `Allow | Deny | Transform`. Cost: the kit becomes a public API with a
+      compatibility promise, so the ADR must say which protocol members are
+      frozen and which may grow, and the suite must stay offline and
+      dependency-free to be usable as a gate in someone else's CI.
+
+- [ ] **Memory as an opt-in protocol: continuity without owning the store.**
+      Continuity today is the session event log plus `harness chat` reusing a
+      `session_id`; skills are static text and nothing survives a session except
+      the transcript. The ask: a `Memory` protocol (`write`, `read`, `forget`,
+      scoped to run / session / user, with a retention policy on each record) so
+      the store and the retention rule are swappable — SQLite is the reference,
+      a vector store is someone else's package, and the harness never grows a
+      second database it cannot delete from. This amends ADR-0017's "no memory"
+      non-goal rather than pretending it never said that, so the ADR has to be
+      explicit about the privacy constraints the rest of the repo already
+      enforces: what may be written after `redact_event()` (ADR-0005), whether a
+      sentinel-mapped value (ADR-0025) is ever stored unsealed, and how
+      `harness` lists and deletes what it wrote (ADR-0027). Default off; a
+      manifest that names no memory backend stores nothing, and a test asserts
+      that, plus one asserting `forget` actually removes the row. Cost: a new
+      layer with a retention window to defend, and cross-user reads that need an
+      identity the demo does not have yet.
+
+- [ ] **MCP server support, to complement the MCP client.** ADR-0013 is
+      consumption-only: `harness` calls MCP servers, it never serves. Inverting
+      that exposes the registry's tools — already JSON-Schema described, already
+      approval-gated in-process — to another client over the MCP transport. The
+      honest cost is a trust boundary for callers that does not exist today:
+      which tools are served, under whose authority a `side_effecting` call runs,
+      and what an approval means when the caller is not the operator. Listing
+      `refund_order` without answering those would hand out the demo's
+      side effects to anything that connects. Needs its own ADR (ADR-0013 is the
+      context, not a repeal), opt-in and off by default, an event type for every
+      served call, and a test asserting the default serves nothing.
+
+### Surfaces
 
 - [ ] **Streaming tool activity into the UI.** `/v1/chat/completions` returns the
       assistant's text; the tool calls a turn made are only in the event log.
