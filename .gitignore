@@ -15,6 +15,7 @@ build/
 .mypy_cache/
 .ruff_cache/
 .DS_Store
+.opencode/
 
 # regenerable: uv run python examples/b2b-support/seed.py
 examples/b2b-support/demo.db
