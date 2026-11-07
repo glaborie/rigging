@@ -1,8 +1,8 @@
 # ADR-0029: An approval can outlive the run that asked for it
 
-**Status:** Proposed — not implemented yet; this page is the sign-off for hard
-rule 6. Amends ADR-0007 (approval is a policy call inside the loop) and ADR-0023
-(the page's approval channel) without repealing either.
+**Status:** Accepted (implemented). Amends ADR-0007 (approval is a policy call
+inside the loop) and ADR-0023 (the page's approval channel) without repealing
+either.
 
 ## Context
 
@@ -101,6 +101,10 @@ the feature and it is worth paying once, deliberately.
 
 Cost, honestly:
 
+- **Two `run_finished` events, one run.** A suspension ends the run and a resume
+  ends it again, so the log carries `pending_approval` followed by the real
+  outcome. The projection that reads run status takes the last one; anything that
+  counts endings must say which it means.
 - **Two traces, one run id.** Resume starts a new root span with the same
   `rigging.run_id` and `rigging.resumed=true`. Langfuse shows two observations
   for one run; the alternative is holding a span open across a process boundary,

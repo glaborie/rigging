@@ -70,6 +70,30 @@ def _parser() -> argparse.ArgumentParser:
     escalations.add_argument("--limit", type=int, default=20)
     escalations.add_argument("--json", action="store_true")
 
+    approvals = sub.add_parser("approvals",
+                               help="list side-effecting calls waiting for a human")
+    approvals.add_argument("--db", default=None,
+                           help="SQLite path (default: $RIGGING_DB_PATH)")
+    approvals.add_argument("--limit", type=int, default=20)
+    approvals.add_argument("--json", action="store_true")
+
+    approve = sub.add_parser("approve",
+                             help="answer a pending approval and resume its run (ADR-0029)")
+    approve.add_argument("manifest", help="path to agent.yaml")
+    approve.add_argument("approval_id", help="ap_... from `harness approvals`")
+    approve.add_argument("--deny", action="store_true", help="deny instead of approving")
+    approve.add_argument("--as", dest="approver", default="cli",
+                         help="who is answering: a label, not an identity (ADR-0029)")
+    approve.add_argument("--note", default="", help="why (recorded in the verdict)")
+    approve.add_argument("--db", default=None,
+                         help="SQLite path (default: $RIGGING_DB_PATH)")
+    approve.add_argument("--defaults", default=None, help="harness.yaml to merge under the manifest")
+    approve.add_argument("--model", default=None, help="override the manifest's model")
+    approve.add_argument("--profile", default=None, help="override the credential_profile")
+    approve.add_argument("--export", action="append", default=None, metavar="NAME",
+                         help="override the manifest exporters")
+    approve.add_argument("--json", action="store_true")
+
     ev = sub.add_parser("eval", help="run an eval suite over event-log predicates")
     ev.add_argument("suite", help="path to suite.yaml")
     ev.add_argument("--db", default=None)
@@ -204,8 +228,19 @@ def cmd_run(args: argparse.Namespace) -> int:
               file=sys.stderr)
         if result.error:
             print(f"  {result.error}", file=sys.stderr)
+        if result.pending is not None:
+            # A deferred approval is not a failure and not a finish: the run is
+            # parked in the log until a human answers it (ADR-0029). Exit 3 so a
+            # script can tell it apart from "ok" (0) and "did not finish" (1).
+            print(f"  approval needed: {result.pending.approval_id} "
+                  f"({result.pending.tool} {json.dumps(result.pending.arguments)})",
+                  file=sys.stderr)
+            print(f"  answer with: harness approve {args.manifest} "
+                  f"{result.pending.approval_id} [--deny]", file=sys.stderr)
     else:
         print(json.dumps(result.model_dump(), indent=2, default=str))
+    if result.status == "pending_approval":
+        return 3
     return 0 if result.status == "ok" else 1
 
 
@@ -311,6 +346,69 @@ def cmd_escalations(args: argparse.Namespace) -> int:
               f"{title[:18]:<18} {summary[:70]}")
     print("\ndrill in with: harness runs --run <run_id>")
     return 0
+
+
+def _age(seconds: Any) -> str:
+    """A wait, in the unit a human reads at a glance."""
+    s = int(float(seconds or 0))
+    if s < 60:
+        return f"{s}s"
+    if s < 3600:
+        return f"{s // 60}m"
+    if s < 86400:
+        return f"{s // 3600}h"
+    return f"{s // 86400}d"
+
+
+def cmd_approvals(args: argparse.Namespace) -> int:
+    """What is waiting for a human, and how long it has waited (ADR-0029)."""
+    with EventLog(args.db or settings.db_path) as log:
+        rows = log.approvals(limit=max(1, min(args.limit, 200)))
+    if args.json:
+        print(json.dumps(rows, indent=2, default=str))
+        return 0
+    if not rows:
+        print("no approvals waiting", file=sys.stderr)
+        return 0
+    print(f"{'waiting':<10} {'approval':<16} {'tool':<18} {'run':<16} arguments")
+    for row in rows:
+        arguments = json.dumps(row.get("arguments") or {}, default=str)
+        print(f"{_age(row.get('age_s')):<10} {row.get('approval_id')!s:<16} "
+              f"{row.get('tool')!s:<18} {row['run_id']!s:<16} {arguments[:60]}")
+        if row.get("expired"):
+            print("  expired: answering it now denies it")
+    print("\nanswer with: harness approve <manifest> <approval_id> [--deny] [--as NAME]")
+    return 0
+
+
+def cmd_approve(args: argparse.Namespace) -> int:
+    """Answer a pending approval and resume the run it stopped (ADR-0029)."""
+    from rigging.loop import resume_run
+
+    spec: AgentSpec = _with_overrides(
+        load_manifest(args.manifest, defaults_path=args.defaults), args)
+    with EventLog(args.db or settings.db_path) as log:
+        match = next((row for row in log.approvals(limit=200)
+                      if row.get("approval_id") == args.approval_id), None)
+        if match is None:
+            print(f"no pending approval {args.approval_id!r}", file=sys.stderr)
+            return 1
+        result = resume_run(spec, str(match["run_id"]), approved=not args.deny,
+                            approver=args.approver, note=args.note, log=log)
+
+    if args.json:
+        print(json.dumps(result.model_dump(), indent=2, default=str))
+    else:
+        if result.output:
+            print(result.output)
+        print(f"\n— run {result.run_id} · {result.status} · steps {result.steps}",
+              file=sys.stderr)
+        if result.error:
+            print(f"  {result.error}", file=sys.stderr)
+        if result.pending is not None:
+            print(f"  next approval: {result.pending.approval_id} "
+                  f"({result.pending.tool})", file=sys.stderr)
+    return 0 if result.status in ("ok", "pending_approval") else 1
 
 
 def cmd_pii(args: argparse.Namespace) -> int:
@@ -504,6 +602,8 @@ HANDLERS = {
     "tools": cmd_tools,
     "runs": cmd_runs,
     "escalations": cmd_escalations,
+    "approvals": cmd_approvals,
+    "approve": cmd_approve,
     "chat": cmd_chat,
     "index": cmd_index,
     "eval": cmd_eval,

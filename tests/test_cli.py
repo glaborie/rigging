@@ -133,3 +133,60 @@ def test_run_without_overrides_keeps_the_manifest_pair(monkeypatch):
     assert cli.main(["run", "agent.yaml", "hi"]) == 0
     assert seen["spec"].model == spec.model
     assert seen["spec"].credential_profile == spec.credential_profile
+
+# --------------------------------------------------- pending approvals (ADR-0029)
+
+def test_cli_approvals_lists_the_queue(tmp_path, capsys):
+    """`harness approvals` is the same projection the service serves."""
+    import json as _json
+    import pathlib as _pathlib
+
+    from rigging import cli
+    from rigging.config import settings
+    from rigging.events import EventLog
+    from rigging.loop import run_agent
+    from rigging.manifest import AgentSpec, ApprovalCfg, Limits
+    from rigging.registry import Registry
+    from rigging.testing import FakeClient
+
+    def refund(amount: int) -> str:
+        """Refund money."""
+        return f"refunded {amount}"
+
+    refund.__rigging_tool__ = {"name": "refund", "description": "Refund money.",
+                               "side_effecting": True}
+    registry = Registry()
+    registry.add("tool", "refund", refund)
+
+    spec = AgentSpec(name="t", model="fake", tools=["refund"],
+                     approval=ApprovalCfg(policy="deferred"), limits=Limits(max_steps=3))
+    client = FakeClient([
+        {"role": "assistant", "content": "", "tool_calls": [
+            {"id": "1", "name": "refund", "arguments": {"amount": 10}}]},
+        {"role": "assistant", "content": "done"},
+    ])
+    db = tmp_path / "r.db"
+    with EventLog(db) as log:
+        result = run_agent(spec, "refund 10", registry=registry, client=client, log=log)
+    pending = result.pending
+    assert pending is not None
+
+    assert cli.main(["approvals", "--db", str(db), "--json"]) == 0
+    rows = _json.loads(capsys.readouterr().out)
+    assert [row["approval_id"] for row in rows] == [pending.approval_id]
+    assert rows[0]["tool"] == "refund"
+
+    assert cli.main(["approvals", "--db", str(db)]) == 0
+    shown = capsys.readouterr().out
+    assert pending.approval_id in shown
+    assert "harness approve" in shown
+    assert _pathlib.Path(settings.db_path).name  # the flag, not the default, was used
+
+
+def test_cli_approve_parses_its_arguments():
+    from rigging.cli import _parser
+
+    args = _parser().parse_args(["approve", "agent.yaml", "ap_1", "--deny", "--as", "bob"])
+    assert (args.command, args.manifest, args.approval_id) == ("approve", "agent.yaml", "ap_1")
+    assert args.deny is True
+    assert args.approver == "bob"

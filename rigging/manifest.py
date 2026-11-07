@@ -37,7 +37,7 @@ class Guardrails(BaseModel):
 
 
 class ApprovalCfg(BaseModel):
-    policy: Literal["cli", "scripted", "auto_deny"] = "auto_deny"
+    policy: Literal["cli", "scripted", "auto_deny", "deferred"] = "auto_deny"
     side_effecting_tools: list[str] = Field(default_factory=list)
 
 

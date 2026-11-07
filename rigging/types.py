@@ -152,15 +152,39 @@ class Handoff(BaseModel):
     created_at: float = Field(default_factory=time.time)
 
 
+class PendingApproval(BaseModel):
+    """A side-effecting call waiting for a human, outliving the run (ADR-0029).
+
+    Written to the log as `approval_pending`; `run_id` + `call_id` are what makes
+    a second process able to pick the run up where it stopped. `expires_at` is a
+    denial waiting to happen, never an approval: silence must not authorise.
+    """
+
+    approval_id: str
+    run_id: str
+    call_id: str
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    reason: str = ""
+    created_at: float = 0.0
+    expires_at: float | None = None
+    # SHA-256 of the proposed arguments: what the human approved, and what a
+    # resume must still be looking at (ADR-0029).
+    arguments_sha256: str = ""
+
+
 class RunResult(BaseModel):
     run_id: str
-    status: Literal["ok", "budget_exhausted", "denied", "error"]
+    status: Literal["ok", "budget_exhausted", "denied", "error", "pending_approval"]
     output: str = ""
     handoff: Handoff | None = None
     usage: Usage = Field(default_factory=Usage)
     steps: int = 0
     cost_usd: float | None = None
     error: str | None = None
+    # set when status is "pending_approval": what a human has to answer, and the
+    # id to answer it with (ADR-0029). A suspended run has executed nothing.
+    pending: PendingApproval | None = None
     # full message transcript after the run — for the chat REPL only; excluded
     # from JSON so `--json` output stays a terminal record, not a transcript
     history: list[Message] | None = Field(default=None, exclude=True)

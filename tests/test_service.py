@@ -152,7 +152,7 @@ def test_the_service_never_writes(tmp_path):
     log, run_id = _finished_run(tmp_path)
     app = create_app(log.path)
     assert {route.path for route in app.routes if hasattr(route, "methods")} == {
-        "/", "/health", "/api/runs", "/api/escalations", "/api/config",
+        "/", "/health", "/api/runs", "/api/escalations", "/api/approvals", "/api/config",
         "/api/runs/{run_id}", "/api/sessions/{session_id}", "/api/runs/{run_id}/stream",
     }
     assert all(route.methods == {"GET"} for route in app.routes if hasattr(route, "methods"))

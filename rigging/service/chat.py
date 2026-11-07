@@ -19,7 +19,7 @@ from typing import Any
 from rigging.events import EventLog
 from rigging.loop import run_agent
 from rigging.manifest import AgentSpec
-from rigging.types import ToolCall
+from rigging.types import RunResult, ToolCall
 
 #: How long a consequential tool waits for the page before it is denied.
 APPROVAL_TIMEOUT_S = 600.0
@@ -114,6 +114,28 @@ class ChatRunner:
                                  else "denied in the web view")
             slot.answered.set()
             return True
+
+    def answer_deferred(self, approval_id: str, *, approved: bool, approver: str,
+                        note: str = "") -> RunResult:
+        """Resume a run parked by a `deferred` policy (ADR-0029).
+
+        Not the page's channel: that one answers a live thread. This is for the
+        client that was not there when the run stopped, so the run continues from
+        the log in this request — one run, one `resume_run`.
+        """
+        from rigging.loop import resume_run
+
+        log = EventLog(self.db)
+        try:
+            match = next((row for row in log.approvals(limit=200)
+                          if row.get("approval_id") == approval_id), None)
+            if match is None:
+                raise LookupError(approval_id)
+            return resume_run(self.spec, str(match["run_id"]), approved=approved,
+                              approver=approver, note=note, log=log,
+                              client=self._client_factory(), registry=self._registry)
+        finally:
+            log.close()
 
     # ------------------------------------------------------------------ thread
 
