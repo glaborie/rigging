@@ -1001,7 +1001,8 @@ def resume_run(spec: AgentSpec, run_id: str, *, approved: bool, approver: str,
             approved, note = False, note or "expired: no answer before the TTL"
 
         if log.decide_approval(run_id, str(pending["approval_id"]), approved=approved,
-                               approver=approver, note=note) is None:
+                               approver=approver, note=note,
+                               tool=str(pending.get("tool") or "")) is None:
             raise RiggingError(
                 f"approval {pending.get('approval_id')} was already answered")
     except Exception:

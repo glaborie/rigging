@@ -308,7 +308,7 @@ class EventLog:
         return latest
 
     def decide_approval(self, run_id: str, approval_id: str, *, approved: bool,
-                        approver: str, note: str = "") -> int | None:
+                        approver: str, note: str = "", tool: str = "") -> int | None:
         """Append `approval_verdict` exactly once, under a write lock (ADR-0029).
 
         Two clients answering the same approval must not both win: the check and
@@ -324,12 +324,17 @@ class EventLog:
                 if json.loads(row["payload"]).get("approval_id") == approval_id:
                     self._db.execute("ROLLBACK")
                     return None
-            seq = self._insert(run_id, "approval_verdict", {
+            payload = {
                 "approval_id": approval_id,
                 "approved": approved,
                 "approver": approver,
                 "note": note,
-            })
+            }
+            if tool:
+                # Same field the blocking path writes, so a verdict reads the same
+                # whichever channel answered it.
+                payload["tool"] = tool
+            seq = self._insert(run_id, "approval_verdict", payload)
             self._db.commit()
         except Exception:
             self._db.rollback()

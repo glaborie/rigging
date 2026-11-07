@@ -304,3 +304,80 @@ def test_the_page_can_run_a_turn_and_approve_it(tmp_path):
             assert errors == [], f"the page raised: {errors}"
         finally:
             browser.close()
+
+
+def test_a_parked_approval_shows_its_id_and_can_be_answered(tmp_path):
+    """ADR-0029 in the browser: the parked card names the id, and answering it resumes.
+
+    The first version of this card showed no id at all, so a reviewer in the page
+    had no way to answer the run it had just parked. The id is the handle.
+    """
+    import yaml
+
+    from rigging.manifest import load_manifest
+    from rigging.registry import Registry
+    from rigging.service import ChatRunner
+    from rigging.testing import FakeClient
+
+    db = tmp_path / "deferred.db"
+    EventLog(db).close()
+
+    path = tmp_path / "agent.yaml"
+    path.write_text(yaml.safe_dump({
+        "name": "browser deferred", "model": "fake", "system_prompt": "be terse",
+        "limits": {"max_steps": 4}, "tools": ["refund"],
+        # `deferred`, not `cli`: the run parks instead of blocking the thread.
+        "approval": {"policy": "deferred", "side_effecting_tools": ["refund"]},
+    }))
+    reg = Registry()
+
+    def refund(amount: int) -> str:
+        """Refund money."""
+        return f"refunded {amount}"
+
+    refund.__rigging_tool__ = {"name": "refund", "description": "Refund money.",
+                               "side_effecting": True}
+    reg.add("tool", "refund", refund)
+
+    client = FakeClient([
+        {"role": "assistant", "content": "",
+         "tool_calls": [{"id": "1", "name": "refund", "arguments": {"amount": 10}}]},
+        {"role": "assistant", "content": "the refund went through"},
+    ])
+    runner = ChatRunner(load_manifest(str(path)), str(db),
+                        client_factory=lambda: client, registry=reg)
+    token = "browser-token"
+
+    with _Server(str(db), _free_port(), tokens=[token], runner=runner) as base_url, \
+            sync_playwright() as play:
+        try:
+            browser = play.chromium.launch()
+        except PlaywrightError as exc:  # no Chromium downloaded
+            pytest.skip(f"chromium is not installed: {exc}")
+        page = browser.new_page()
+        errors: list[str] = []
+        page.on("pageerror", lambda exc: errors.append(str(exc)))
+        try:
+            page.add_init_script(
+                f"sessionStorage.setItem('rigging.token', {token!r});"
+            )
+            page.goto(base_url, wait_until="domcontentloaded")
+            page.wait_for_selector("#composer:not([hidden])", timeout=10_000)
+
+            page.fill("#prompt", "refund 10 for ORD-1")
+            page.press("#prompt", "Enter")
+
+            page.wait_for_selector(".approve button.yes", timeout=10_000)
+            card = page.locator(".card", has=page.locator(".approve")).first
+            text = card.inner_text()
+            assert "ap_" in text, f"the parked card hides the id: {text!r}"
+            assert "refund" in text
+
+            page.click(".approve button.yes")
+
+            # The resume ran inside the POST, so the page shows the finished turn.
+            page.wait_for_selector("text=the refund went through", timeout=10_000)
+            assert "resumed · ap_" in page.inner_text("#view")
+            assert errors == [], f"the page raised: {errors}"
+        finally:
+            browser.close()

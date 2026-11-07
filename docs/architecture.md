@@ -292,7 +292,10 @@ Properties that stay deliberate:
 - **Approvals stay in the loop.** `WebApproval` is an `ApprovalPolicy` that blocks
   the loop thread until the page answers; the loop writes `approval_requested`
   and `approval_verdict` and makes the decision. No answer in ten minutes is a
-  denial. The page cannot approve anything the loop did not ask about.
+  denial. The page cannot approve anything the loop did not ask about. A parked
+  (`deferred`) approval is answered from the same card: it shows the `ap_…` id and
+  posts to `POST /api/approvals/{id}`, the resume runs inside that request, and
+  the page reopens the run to show the turn it finished (ADR-0029).
 - **No second store.** The page renders whatever is in the log, and multi-turn
   history is `EventLog.session_messages()` — a projection over the session's root
   runs. A restart loses nothing.
