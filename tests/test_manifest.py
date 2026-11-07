@@ -40,3 +40,14 @@ def test_invalid_manifest_rejected(tmp_path: Path) -> None:
     bad.write_text("name: x\nlimits:\n  max_steps: 0\n", encoding="utf-8")
     with pytest.raises(ManifestError):
         load_manifest(bad)
+
+
+def test_the_deferred_demo_is_the_canonical_demo_apart_from_the_policy() -> None:
+    """ADR-0029 ships as a manifest a reader can run; it must not drift into a lie."""
+    deferred = load_manifest("examples/b2b-support/agent-deferred.yaml")
+    canonical = load_manifest("examples/b2b-support/agent.yaml")
+    assert deferred.approval.policy == "deferred"
+    assert canonical.approval.policy == "cli"
+    assert deferred.tools == canonical.tools
+    assert deferred.guardrails == canonical.guardrails
+    assert deferred.retriever == canonical.retriever
