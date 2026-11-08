@@ -26,7 +26,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, Response, StreamingRes
 from pydantic import BaseModel, Field
 
 from rigging.errors import RiggingError
-from rigging.events import project_escalations
+from rigging.events import project_approvals, project_escalations
 from rigging.service.chat import ChatRunner
 from rigging.service.openai_api import (
     PUBLIC_MESSAGES,
@@ -103,6 +103,12 @@ def escalations(db: str | Path, limit: int = 50) -> list[dict[str, Any]]:
     """Handoffs waiting for a human, newest first — the same projection as the CLI."""
     with closing(_connect(db)) as conn:
         return project_escalations(conn, limit)
+
+
+def approvals(db: str | Path, limit: int = 50) -> list[dict[str, Any]]:
+    """Side-effecting calls waiting for a human (ADR-0029), same as the CLI."""
+    with closing(_connect(db)) as conn:
+        return project_approvals(conn, limit)
 
 
 def _session_running(db: str | Path, session_id: str) -> bool:
@@ -317,6 +323,14 @@ class ApprovalRequest(BaseModel):
     note: str = Field(default="", max_length=500)
 
 
+class ApprovalDecision(BaseModel):
+    """An answer to a *deferred* approval, from a client that was not there (ADR-0029)."""
+
+    approve: bool
+    approver: str = Field(default="", max_length=120)
+    note: str = Field(default="", max_length=500)
+
+
 def create_app(
     db: str | Path,
     *,
@@ -407,6 +421,10 @@ def create_app(
     def list_escalations(limit: int = 50) -> dict[str, Any]:
         return {"escalations": escalations(db, limit)}
 
+    @app.get("/api/approvals", dependencies=guard)
+    def list_approvals(limit: int = 50) -> dict[str, Any]:
+        return {"approvals": approvals(db, max(1, min(limit, 100)))}
+
     @app.get("/api/config", dependencies=guard)
     def config() -> dict[str, Any]:
         """What the page may do: chat needs a manifest and a token (ADR-0023)."""
@@ -436,6 +454,28 @@ def create_app(
                     status_code=409, detail="no approval is waiting for this run"
                 )
             return {"run_id": run_id, "approved": body.approve}
+
+        @app.post("/api/approvals/{approval_id}", dependencies=guard)
+        def answer_deferred(approval_id: str, body: ApprovalDecision) -> dict[str, Any]:
+            """Answer a parked run and let it continue (ADR-0029).
+
+            The token is the authority here, and `approver` is a label the caller
+            declares: this harness has no accounts and does not claim to.
+            """
+            try:
+                result = runner.answer_deferred(
+                    approval_id, approved=body.approve,
+                    approver=body.approver.strip() or "service",
+                    note=body.note,
+                )
+            except LookupError:
+                raise HTTPException(
+                    status_code=409, detail="no approval is waiting for this id"
+                ) from None
+            except RiggingError as exc:
+                raise HTTPException(status_code=409, detail=str(exc)) from None
+            return {"run_id": result.run_id, "status": result.status,
+                    "approved": body.approve, "output": result.output}
 
     if bridge is not None:
 
@@ -1071,7 +1111,7 @@ function guardrailNote(ev) {
   return node;
 }
 
-function approvalCard(ev, index, answeredAt) {
+function approvalCard(ev, index, answeredAt, pending) {
   const card = el('div', 'card');
   const head = el('div', 'head');
   head.innerHTML = `<span class="name">${esc(ev.payload.tool)}</span>
@@ -1079,19 +1119,53 @@ function approvalCard(ev, index, answeredAt) {
   head.appendChild(el('button', 'fold', '▾'));
   card.appendChild(head);
   card.appendChild(el('div', 'body', JSON.stringify(ev.payload.arguments || {}, null, 2)));
+  if (pending) {
+    // A deferred run is parked: this id is the only handle a client has on it,
+    // so the page must show it (ADR-0029).
+    const idRow = el('div', 'body');
+    idRow.innerHTML = `<span class="hook">parked</span>
+      <code>${esc(pending.payload.approval_id)}</code>`;
+    card.appendChild(idRow);
+  }
   wireFold(card, `approval:${ev.payload.tool}:${ev.ts}`);
   const row = el('div', 'approve');
   const yes = el('button', 'yes', 'approve');
   const no = el('button', 'no', 'deny');
-  yes.addEventListener('click', () => answerApproval(true));
-  no.addEventListener('click', () => answerApproval(false));
+  if (pending) {
+    yes.addEventListener('click', () => answerDeferred(pending.payload.approval_id, true));
+    no.addEventListener('click', () => answerDeferred(pending.payload.approval_id, false));
+  } else {
+    yes.addEventListener('click', () => answerApproval(true));
+    no.addEventListener('click', () => answerApproval(false));
+  }
   row.append(yes, no);
   // Once answered, the verdict line below carries the outcome; buttons that do
   // nothing are worse than no buttons.
-  if (answeredAt <= index && config.chat && config.approvals === 'page') {
+  if (answeredAt <= index && config.chat && (pending || config.approvals === 'page')) {
     card.appendChild(row);
   }
   return card;
+}
+
+async function answerDeferred(approvalId, approve) {
+  setBusy(true);
+  try {
+    const res = await postJson(`/api/approvals/${encodeURIComponent(approvalId)}`,
+      { approve, approver: 'web', note: approve ? 'approved in the web view'
+                                                : 'denied in the web view' });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      viewEl.appendChild(el('p', 'note', detail.detail || 'could not answer the approval'));
+      setBusy(false);
+      return;
+    }
+    // The resume ran inside that POST, so reopening the run shows the turn it
+    // finished rather than the one that stopped.
+    if (currentRun) await openRun(currentRun);
+  } catch {
+    viewEl.appendChild(el('p', 'note', 'could not reach the service'));
+    setBusy(false);
+  }
 }
 
 async function answerApproval(approve) {
@@ -1113,10 +1187,17 @@ async function answerApproval(approve) {
 
 function verdictCard(ev) {
   const approved = ev.payload.approved;
+  const who = ev.payload.approver ? ` · ${esc(ev.payload.approver)}` : '';
   const node = el('div', 'note');
-  node.innerHTML = `<span class="hook">${approved ? 'approved' : 'denied'} · ${esc(ev.payload.tool)}</span> `
+  node.innerHTML = `<span class="hook">${approved ? 'approved' : 'denied'} · `
+    + `${esc(ev.payload.tool || ev.payload.approval_id || '')}${who}</span> `
     + `<span>${esc(ev.payload.note || '')}</span>`;
   return node;
+}
+
+function resumedNote(p) {
+  return el('div', 'note',
+    `resumed · ${p.approval_id || ''} answered by ${p.approver || 'someone'}`);
 }
 
 function footCard() {
@@ -1194,11 +1275,23 @@ function renderAll() {
       case 'guardrail_verdict':
         nodes.push(guardrailNote(ev));
         break;
-      case 'approval_requested':
-        nodes.push(approvalCard(ev, index, answeredAt));
+      case 'approval_requested': {
+        // A deferred policy writes `approval_pending` immediately after the
+        // request; pair them so the card can show the id a client answers with.
+        let pending = null;
+        for (let j = index + 1; j < events.length; j += 1) {
+          const next = events[j];
+          if (next.type !== 'approval_pending') break;
+          if (next.payload.tool === p.tool) { pending = next; break; }
+        }
+        nodes.push(approvalCard(ev, index, answeredAt, pending));
         break;
+      }
       case 'approval_verdict':
         nodes.push(verdictCard(ev));
+        break;
+      case 'run_resumed':
+        nodes.push(resumedNote(p));
         break;
       case 'escalation': {
         const facts = p.facts && Object.keys(p.facts).length

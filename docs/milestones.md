@@ -337,24 +337,18 @@ item needs its ADR before code (standing rule 3).
 
 ### Run control
 
-- [ ] **An approval lifecycle: pending → authorized verdict → resume.** Today an
-      approval is a *blocking call inside the run*: `ApprovalPolicy.request()` is
-      called by the loop and the thread waits — the CLI prompt blocks on stdin,
-      `WebApproval` waits up to `APPROVAL_TIMEOUT_S` for the page's POST, and a
-      timeout is a deny. That ties an approval to a live thread, so a reviewer who
-      is not watching at that moment cannot answer, and a restart loses the
-      pending request. The ask: `approval_requested` returns a *pending approval
-      id* to the client and the turn ends; an authorized user then approves or
-      denies it against that id, and the run resumes from the event log at the
-      tool call it stopped on — same session, same messages, no re-execution of
-      prior tools. Requires (a) an approver identity, which the demo deliberately
-      does not have yet, so the ADR must say who may answer and how that is
-      proven; (b) a resume path that reconstructs loop state from `run_events`
-      rather than from memory; (c) a test per path asserting the consequential
-      tool's side effect is absent *before* approval and present only after an
-      approve verdict — never on deny, timeout or a dropped connection. Cost: two
-      durable states (`pending`, `awaiting_resume`) that outlive the process, and
-      an authorisation surface that did not exist before.
+- [x] **An approval lifecycle: pending → authorized verdict → resume.**
+      `approval.policy: deferred` suspends the run instead of answering: the loop
+      writes `approval_pending` (id, call, arguments, digest, TTL) and ends in
+      `pending_approval` with the tool **not executed**. `resume_run` (or
+      `harness approve`, `POST /api/approvals/{id}`) records the verdict once
+      under `BEGIN IMMEDIATE`, rebuilds the transcript from the log, re-runs
+      `on_tool_call` because post-transform arguments are never stored, executes
+      only the calls without a `tool_result`, and re-enters the same step engine at
+      `model calls + 1`. `harness approvals` / `GET /api/approvals` list what is
+      waiting and for how long; an expired approval denies. Nine tests in
+      `test_approval_lifecycle.py`, the first of which asserts the side effect is
+      absent at suspension. ADR-0029.
 
 - [ ] **Explicit run lifecycle and recovery contracts.** Timeouts, retries,
       cancellation and process restarts are each handled *somewhere* today, and

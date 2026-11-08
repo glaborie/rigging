@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     prices_file: str = "prices.yaml"
     request_timeout_s: float = 120.0
     max_retries: int = 3
+    # How long a `pending_approval` may wait before resume treats it as a denial
+    # (ADR-0029). Silence is never an authorisation: expiry denies, like the
+    # page's blocking timeout does (ADR-0023).
+    approval_ttl_s: float = Field(default=86400.0,
+                                  validation_alias="RIGGING_APPROVAL_TTL_S")
 
     # web view auth (ADR-0021): comma-separated to allow rotation. Empty means no
     # auth, which `harness serve` only allows on a loopback bind.

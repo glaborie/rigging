@@ -20,6 +20,12 @@ subagents and opt-in parallel tool execution are implemented and tested (374
 offline tests plus two browser tests; ruff + `mypy --strict` clean). All four
 exit-criteria demos verified live.
 
+Post-v0.8 (unreleased): an approval can now outlive its run (ADR-0029).
+`approval.policy: deferred` parks a side-effecting call as `pending_approval` with
+the tool **not executed**; `resume_run`, `harness approve` and
+`POST /api/approvals/{id}` answer it from the log, and the run continues without
+replaying prior tools. `harness approvals` lists what is waiting.
+
 ## Hard rules (violating these fails review)
 
 1. **The core never imports a vendor.** `rigging/protocols.py` imports only
@@ -78,7 +84,7 @@ rigging/
                     openai_api.py serves /v1 for a chat UI, no approvals (ADR-0028)
   subagents.py      spawn_<name> tools that run a child agent (ADR-0019)
   init_agent.py     `harness init`: the manifest interview, validated before writing
-  cli.py            harness run|init|schema|tools|runs|escalations|chat|index|eval|calibrate|serve|pii
+  cli.py            harness run|init|schema|tools|runs|escalations|approvals|approve|chat|index|eval|calibrate|serve|pii
 rigging/schema/agent.schema.json   the manifest contract (authoritative)
 docs/architecture.md               layers, loop sequence, event schema
 docs/adr/                          one page per decision, numbered

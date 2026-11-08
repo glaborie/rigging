@@ -19,6 +19,14 @@ It exercises every layer of the harness at once:
 | escalation | `escalate_to_human` produces a structured handoff |
 | observability | spans per step, exported to Langfuse |
 
+`agent-deferred.yaml` is the same manifest with `approval.policy: deferred`: a
+side-effecting call is **parked** as `pending_approval` instead of blocking the
+run, and a human answers it later from the log — `harness approvals`, then
+`harness approve <manifest> <ap_…> [--deny]`, or `POST /api/approvals/{id}`
+(ADR-0029). Test with a refund inside the policy: `$95` on ORD-1002 passes the
+30-day window and the $500 autonomous limit, so it reaches the approval;
+anything larger is denied by a guardrail first.
+
 ## `hello/` — the v0.1 smoke test
 
 No tools, no retrieval, one prompt. Use this to verify a gateway is wired

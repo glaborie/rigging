@@ -15,14 +15,21 @@ from __future__ import annotations
 
 import json
 import time
+import uuid
 from collections.abc import Callable, Iterator, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any
 
-from rigging.approvals import AutoDenyApproval, CLIPromptApproval, ScriptedApproval
+from rigging.approvals import (
+    ApprovalPending,
+    AutoDenyApproval,
+    CLIPromptApproval,
+    DeferredApproval,
+    ScriptedApproval,
+)
 from rigging.config import settings
-from rigging.errors import CapabilityNotFound, ManifestError
+from rigging.errors import CapabilityNotFound, ManifestError, RiggingError
 from rigging.events import EventLog
 from rigging.manifest import AgentSpec
 from rigging.pricing import PriceTable
@@ -34,6 +41,7 @@ from rigging.types import (
     ModelDelta,
     ModelRequest,
     ModelResponse,
+    PendingApproval,
     RunContext,
     RunResult,
     ToolCall,
@@ -295,6 +303,7 @@ def assemble(spec: AgentSpec, *, registry: Registry | None = None, client: Any =
         "cli": CLIPromptApproval,
         "scripted": ScriptedApproval,
         "auto_deny": AutoDenyApproval,
+        "deferred": DeferredApproval,
     }[spec.approval.policy]()
     if spec.approval.side_effecting_tools:
         for name in spec.approval.side_effecting_tools:
@@ -387,6 +396,80 @@ def _hook_payload(hook: str, current: list[Any]) -> Any:
 
 # --------------------------------------------------------------------------- run
 
+def _run_hooks(agent: Assembled, log: EventLog, run_id: str, root: dict[str, Any],
+               used_tools: set[str], owns_log: bool
+               ) -> tuple[Callable[..., None], Callable[[RunResult], RunResult]]:
+    """`run_finished` and close-on-every-exit, shared by run and resume.
+
+    A resumed run must end its row, its span and its exporters exactly the same
+    way, so both callers build them here rather than in two places that can drift
+    (ADR-0029).
+    """
+
+    def finish(status: str, **extra: Any) -> None:
+        """The `run_finished` event, written once per run (hard rule 2)."""
+        if root["finished"]:
+            return
+        root["finished"] = True
+        log.append(run_id, "run_finished", {"status": status, **extra})
+
+    def close_and(result: RunResult) -> RunResult:
+        """End the run row and root span, and flush every exporter, on every exit.
+
+        A batch processor that is never shut down drops its spans when the CLI
+        exits, and a run-level backend (MLflow) leaves the run RUNNING forever if
+        the root span is never ended. Denied and exhausted runs produced spans too.
+        The log is closed only when this call created it; a caller's log stays open.
+        """
+        finish(result.status, **({"error": result.error} if result.error else {}))
+        log.finish_run(run_id, result.status)
+        if root["span"] is not None and not root["ended"]:
+            _end_span(agent, root["span"], {
+                "rigging.status": result.status,
+                "rigging.steps": result.steps,
+                "gen_ai.usage.input_tokens": result.usage.input_tokens,
+                "gen_ai.usage.output_tokens": result.usage.output_tokens,
+                "rigging.cost_usd": result.cost_usd,
+                **_tool_attributes(used_tools),
+                **_content(agent.spec, output_value=result.output),
+            })
+            root["ended"] = True
+        for exporter in agent.exporters:
+            try:
+                exporter.close()
+            except Exception:
+                continue
+        if owns_log:
+            log.close()
+        return result
+
+    return finish, close_and
+
+
+def _attach_subagents(agent: Assembled, spec: AgentSpec, log: EventLog, session_id: str,
+                      run_id: str, *, registry: Registry | None, client: Any,
+                      depth: int) -> None:
+    """`spawn_<name>` tools are per run, so both run and resume must add them."""
+    if not spec.subagents:
+        return
+    from rigging.subagents import make_spawn_tool, resolve_child
+
+    declared = {t.name for t in agent.tools}
+    for ref in spec.subagents:
+        tool = make_spawn_tool(
+            ref=ref, child=resolve_child(spec, ref),
+            log=log, session_id=session_id, run_id=run_id, depth=depth,
+            registry=registry, client=client,
+            approval=agent.approval, prices=agent.prices,
+        )
+        if tool.name in declared:
+            raise ManifestError(
+                f"subagent {ref.name!r} collides with an existing tool {tool.name!r}"
+            )
+        declared.add(tool.name)
+        agent.tools.append(tool)
+
+
 def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None, client: Any = None,
               log: EventLog | None = None, session_id: str | None = None,
               stream: Callable[[ModelDelta], None] | None = None,
@@ -411,43 +494,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     run_id = log.start_run(session_id=session_id, spec_hash=spec.spec_hash, model=spec.model,
                            parent_run_id=parent_run_id, run_id=run_id)
     ctx = RunContext(session_id=session_id, run_id=run_id)
-
-    def _finish(status: str, **extra: Any) -> None:
-        """The `run_finished` event, written once per run (hard rule 2)."""
-        if root["finished"]:
-            return
-        root["finished"] = True
-        log.append(run_id, "run_finished", {"status": status, **extra})
-
-    def _close_and(result: RunResult) -> RunResult:
-        """End the run row and root span, and flush every exporter, on every exit.
-
-        A batch processor that is never shut down drops its spans when the CLI
-        exits, and a run-level backend (MLflow) leaves the run RUNNING forever if
-        the root span is never ended. Denied and exhausted runs produced spans too.
-        The log is closed only when this call created it; a caller's log stays open.
-        """
-        _finish(result.status, **({"error": result.error} if result.error else {}))
-        log.finish_run(run_id, result.status)
-        if root["span"] is not None and not root["ended"]:
-            _end_span(agent, root["span"], {
-                "rigging.status": result.status,
-                "rigging.steps": result.steps,
-                "gen_ai.usage.input_tokens": result.usage.input_tokens,
-                "gen_ai.usage.output_tokens": result.usage.output_tokens,
-                "rigging.cost_usd": result.cost_usd,
-                **_tool_attributes(used_tools),
-                **_content(agent.spec, output_value=result.output),
-            })
-            root["ended"] = True
-        for exporter in agent.exporters:
-            try:
-                exporter.close()
-            except Exception:
-                continue
-        if owns_log:
-            log.close()
-        return result
+    _finish, _close_and = _run_hooks(agent, log, run_id, root, used_tools, owns_log)
 
     system = spec.prompt().strip()
     if agent.skills is not None:
@@ -466,29 +513,12 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     messages.append(Message(role="user", content=user_content))
     log.append(run_id, "input_received", {"content": user_content})
 
-    if spec.subagents:
-        from rigging.subagents import make_spawn_tool, resolve_child
+    _attach_subagents(agent, spec, log, session_id, run_id,
+                      registry=registry, client=client, depth=depth)
 
-        declared = {t.name for t in agent.tools}
-        for ref in spec.subagents:
-            tool = make_spawn_tool(
-                ref=ref, child=resolve_child(spec, ref),
-                log=log, session_id=session_id, run_id=run_id, depth=depth,
-                registry=registry, client=client,
-                approval=agent.approval, prices=agent.prices,
-            )
-            if tool.name in declared:
-                raise ManifestError(
-                    f"subagent {ref.name!r} collides with an existing tool {tool.name!r}"
-                )
-            declared.add(tool.name)
-            agent.tools.append(tool)
-
-    tools = agent.tool_map()
-    wire = [t.json_schema for t in agent.tools]
     usage = Usage()
     started = time.perf_counter()
-    root["span"] = root_span = _span(agent, "invoke_agent", {
+    root["span"] = _span(agent, "invoke_agent", {
         "langfuse.observation.type": "agent",
         "gen_ai.operation.name": "invoke_agent",
         "gen_ai.system": agent.client.name if hasattr(agent.client, "name") else "openai",
@@ -502,10 +532,35 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         **_trace_name(),
         **_content(spec, input_value=user_content),
     })
+    try:
+        return _drive(agent=agent, spec=spec, log=log, run_id=run_id, ctx=ctx,
+                      messages=messages, usage=usage, started=started, first_step=1,
+                      stream=stream, root=root, used_tools=used_tools,
+                      finish=_finish, close_and=_close_and)
+    except _Suspended as suspended:
+        return _close_and(_pending_result(log, run_id, suspended.pending))
+
+
+def _drive(*, agent: Assembled, spec: AgentSpec, log: EventLog, run_id: str,
+           ctx: RunContext, messages: list[Message], usage: Usage, started: float,
+           first_step: int, stream: Callable[[ModelDelta], None] | None,
+           root: dict[str, Any], used_tools: set[str],
+           finish: Callable[..., None],
+           close_and: Callable[[RunResult], RunResult]) -> RunResult:
+    """The step engine: model, tools, budgets, final answer (ADR-0029).
+
+    Shared by `run_agent` (first_step=1) and `resume_run` (the step after the
+    one that suspended), so a resumed run is the same loop reading a longer
+    transcript — not a second implementation that can drift from it.
+    """
+    tools = agent.tool_map()
+    wire = [t.json_schema for t in agent.tools]
+    root_span = root["span"]
     last: ModelResponse | None = None
     exhausted: str | None = None
+    step = first_step - 1
 
-    for step in range(1, spec.limits.max_steps + 1):
+    for step in range(first_step, spec.limits.max_steps + 1):
         reason = _check_budget(spec, usage, started, agent.prices)
         log.append(run_id, "budget_check", {"step": step, "usage": usage.model_dump(), "blocked": reason})
         if reason:
@@ -530,7 +585,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             error = f"{type(exc).__name__}: {exc}"
             log.append(run_id, "error", {"stage": "model_request", "step": step, "error": error})
             _end_span(agent, call_span, {"rigging.status": "error", "rigging.error": error})
-            return _close_and(RunResult(run_id=run_id, status="error", usage=usage,
+            return close_and(RunResult(run_id=run_id, status="error", usage=usage,
                                         steps=step, error=error,
                                         cost_usd=agent.prices.cost(spec.model, usage)))
 
@@ -566,7 +621,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
             if final is None or not (final.message.content or "").strip():
                 error = "the model returned an empty answer twice"
                 log.append(run_id, "error", {"stage": "empty_answer", "error": error})
-                return _close_and(RunResult(run_id=run_id, status="error", usage=usage,
+                return close_and(RunResult(run_id=run_id, status="error", usage=usage,
                                             steps=step, error=error,
                                             cost_usd=agent.prices.cost(spec.model, usage)))
             last = final
@@ -600,7 +655,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         log.append(run_id, "budget_check", {"exhausted": exhausted})
         final = _final_answer(agent, spec, messages, log, run_id)
         if final is None:
-            return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
+            return close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
                                         steps=spec.limits.max_steps, error=exhausted,
                                         cost_usd=agent.prices.cost(spec.model, usage)))
         # The final answer is a real model call: its tokens are part of the run,
@@ -610,7 +665,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         if not (final.message.content or "").strip():
             error = f"{exhausted}; the final answer was empty"
             log.append(run_id, "error", {"stage": "final_answer", "error": error})
-            return _close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
+            return close_and(RunResult(run_id=run_id, status="budget_exhausted", usage=usage,
                                         steps=spec.limits.max_steps, error=error,
                                         cost_usd=agent.prices.cost(spec.model, usage)))
         last = final
@@ -619,7 +674,7 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
     out_verdict, out_notes = _apply("on_output", agent.guardrails["on_output"], output, messages)
     log.append(run_id, "output_verdict", {"checks": out_notes})
     if isinstance(out_verdict, Deny):
-        return _close_and(RunResult(run_id=run_id, status="denied", usage=usage,
+        return close_and(RunResult(run_id=run_id, status="denied", usage=usage,
                                     error=out_verdict.reason))
     if isinstance(out_verdict, Transform):
         output = out_verdict.value
@@ -635,12 +690,12 @@ def run_agent(spec: AgentSpec, prompt: str, *, registry: Registry | None = None,
         **_content(spec, output_value=output),
     })
     root["ended"] = True
-    _finish("ok", content_chars=len(output))
+    finish("ok", content_chars=len(output))
     result = RunResult(run_id=run_id, status="ok", output=output, usage=usage,
                        steps=step if not exhausted else spec.limits.max_steps,
                        cost_usd=agent.prices.cost(spec.model, usage), handoff=agent.handoff)
     result.history = messages  # chat REPL only; excluded from --json
-    return _close_and(result)
+    return close_and(result)
 
 
 def _check_budget(spec: AgentSpec, usage: Usage, started: float, prices: PriceTable) -> str | None:
@@ -686,6 +741,57 @@ def _run_tool(tool: Any, call: ToolCall, ctx: RunContext) -> ToolResult:
         return ToolResult.error(call, f"{type(exc).__name__}: {exc}")
 
 
+class _Suspended(Exception):
+    """A deferred policy ended the run: the tool has not run (ADR-0029)."""
+
+    def __init__(self, pending: PendingApproval) -> None:
+        self.pending = pending
+        super().__init__(pending.approval_id)
+
+
+def _arguments_digest(arguments: dict[str, Any]) -> str:
+    """What an approval is bound to: the proposed arguments, canonically encoded.
+
+    Resume recomputes this and refuses on a mismatch, so editing the stored
+    request cannot turn one approval into another (ADR-0029).
+    """
+    import hashlib
+
+    return hashlib.sha256(
+        json.dumps(arguments, sort_keys=True, default=str).encode("utf-8")
+    ).hexdigest()
+
+
+def _model_steps(log: EventLog, run_id: str) -> int:
+    """How many model calls a run made, ignoring the tools-disabled final answer."""
+    return sum(1 for ev in log.events(run_id, type_="model_request")
+               if not ev["payload"].get("final_answer"))
+
+
+def _pending_result(log: EventLog, run_id: str, pending: PendingApproval) -> RunResult:
+    """A suspended run: nothing executed, one question open (ADR-0029)."""
+    return RunResult(run_id=run_id, status="pending_approval", usage=log.usage(run_id),
+                     steps=_model_steps(log, run_id), pending=pending)
+
+
+def _suspend(log: EventLog, run_id: str, call: ToolCall, reason: str) -> _Suspended:
+    """Record the question and stop; the tool has not run and will not, here."""
+    now = time.time()
+    pending = PendingApproval(
+        approval_id=f"ap_{uuid.uuid4().hex[:12]}",
+        run_id=run_id,
+        call_id=call.id,
+        tool=call.name,
+        arguments=dict(call.arguments),
+        reason=reason,
+        created_at=now,
+        expires_at=now + settings.approval_ttl_s,
+        arguments_sha256=_arguments_digest(call.arguments),
+    )
+    log.append(run_id, "approval_pending", pending.model_dump())
+    return _Suspended(pending)
+
+
 def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: EventLog,
                   run_id: str) -> tuple[_CallJob, ToolResult | None]:
     """Everything that must happen serially: event, span, guardrails, approval."""
@@ -719,7 +825,14 @@ def _prepare_call(call: ToolCall, tools: dict[str, Any], agent: Assembled, log: 
     if getattr(tool, "side_effecting", False):
         log.append(run_id, "approval_requested", {"tool": proposed.name,
                                                   "arguments": proposed.arguments})
-        approved, note = agent.approval.request(call, tool, "side-effecting tool")
+        try:
+            approved, note = agent.approval.request(call, tool, "side-effecting tool")
+        except ApprovalPending as deferred:
+            # A deferred policy has no answer in this process: end the span that
+            # was opened for a call that will not run, and stop the run here.
+            _end_span(agent, tool_span, {"rigging.status": "pending_approval",
+                                         "gen_ai.tool.name": call.name})
+            raise _suspend(log, run_id, proposed, deferred.reason) from None
         log.append(run_id, "approval_verdict", {"tool": call.name, "approved": approved,
                                                 "note": note})
         if not approved:
@@ -771,10 +884,18 @@ def _execute_calls_parallel(calls: list[ToolCall], tools: dict[str, Any], agent:
     """
     jobs: list[_CallJob] = []
     results: list[ToolResult | None] = []
-    for call in calls:
-        job, early = _prepare_call(call, tools, agent, log, run_id)
-        jobs.append(job)
-        results.append(early)
+    try:
+        for call in calls:
+            job, early = _prepare_call(call, tools, agent, log, run_id)
+            jobs.append(job)
+            results.append(early)
+    except _Suspended:
+        # Nothing ran, so every prepared span is a call that never happened:
+        # end them before the run stops, or the trace claims work it did not do.
+        for job in jobs:
+            _end_span(agent, job.span, {"rigging.status": "pending_approval",
+                                        "gen_ai.tool.name": job.call.name})
+        raise
 
     runnable = [(index, job) for index, job in enumerate(jobs) if results[index] is None]
     if runnable:
@@ -834,3 +955,194 @@ def _final_answer(agent: Assembled, spec: AgentSpec, messages: list[Message], lo
     log.append(run_id, "model_response", {"content": response.message.content,
                                           "usage": response.usage.model_dump(), "final_answer": True})
     return response
+
+
+# ------------------------------------------------------------------ approve & resume
+
+def resume_run(spec: AgentSpec, run_id: str, *, approved: bool, approver: str,
+               note: str = "", registry: Registry | None = None, client: Any = None,
+               log: EventLog | None = None,
+               stream: Callable[[ModelDelta], None] | None = None,
+               prices: PriceTable | None = None) -> RunResult:
+    """Answer a pending approval and continue the run from the log (ADR-0029).
+
+    The decision is recorded once (`EventLog.decide_approval`), then the loop is
+    re-entered at the call it stopped on: same run, same session, prior tools not
+    replayed. Raises `RiggingError` for anything a caller can get wrong — unknown
+    run, not suspended, already answered, a subagent, or arguments that no longer
+    match the digest the approval was bound to.
+    """
+    created_log = log is None
+    log = log or EventLog(settings.db_path)
+    try:
+        row = log.get_run(run_id)
+        if row is None:
+            raise RiggingError(f"unknown run {run_id!r}")
+        if row["parent_run_id"]:
+            raise RiggingError(
+                f"run {run_id!r} is a subagent run; only root runs resume (ADR-0029)")
+        if row["status"] != "pending_approval":
+            raise RiggingError(
+                f"run {run_id!r} is {row['status']!r}, not 'pending_approval'")
+        pending = log.pending_approval(run_id)
+        if pending is None:
+            raise RiggingError(f"run {run_id!r} has no unanswered approval")
+
+        arguments = pending.get("arguments") or {}
+        digest = pending.get("arguments_sha256")
+        if digest and digest != _arguments_digest(arguments):
+            raise RiggingError(
+                f"approval {pending.get('approval_id')} no longer matches the arguments "
+                "it was bound to; refusing to resume")
+
+        expires_at = pending.get("expires_at")
+        if expires_at is not None and time.time() >= float(expires_at) and approved:
+            # Silence is a denial, never an authorisation (ADR-0023, ADR-0029).
+            approved, note = False, note or "expired: no answer before the TTL"
+
+        if log.decide_approval(run_id, str(pending["approval_id"]), approved=approved,
+                               approver=approver, note=note,
+                               tool=str(pending.get("tool") or "")) is None:
+            raise RiggingError(
+                f"approval {pending.get('approval_id')} was already answered")
+    except Exception:
+        if created_log:
+            log.close()
+        raise
+
+    session_id = str(row["session_id"] or "")
+    log.append(run_id, "run_resumed", {
+        "approval_id": pending.get("approval_id"),
+        "approved": approved,
+        "approver": approver,
+    })
+    return _continue_run(spec, run_id, session_id, pending, approved=approved,
+                         approver=approver, note=note, registry=registry, client=client,
+                         log=log, owns_log=created_log, stream=stream, prices=prices)
+
+
+def _continue_run(spec: AgentSpec, run_id: str, session_id: str, pending: dict[str, Any], *,
+                  approved: bool, approver: str, note: str, registry: Registry | None,
+                  client: Any, log: EventLog, owns_log: bool,
+                  stream: Callable[[ModelDelta], None] | None,
+                  prices: PriceTable | None) -> RunResult:
+    agent = assemble(spec, registry=registry, client=client, prices=prices,
+                     session_id=session_id)
+    ctx = RunContext(session_id=session_id, run_id=run_id)
+    used_tools = {str(ev["payload"].get("name"))
+                  for ev in log.events(run_id, type_="tool_call")}
+    root: dict[str, Any] = {"span": None, "ended": False, "finished": False}
+    finish, close_and = _run_hooks(agent, log, run_id, root, used_tools, owns_log)
+
+    _attach_subagents(agent, spec, log, session_id, run_id,
+                      registry=registry, client=client, depth=0)
+
+    system = spec.prompt().strip()
+    if agent.skills is not None:
+        system = f"{system}\n\n{agent.skills.index_block(spec.skills)}".strip()
+    messages = log.messages(run_id)
+    if system and not any(m.role == "system" for m in messages):
+        messages.insert(0, Message(role="system", content=system))
+
+    root["span"] = _span(agent, "invoke_agent", {
+        "langfuse.observation.type": "agent",
+        "gen_ai.operation.name": "invoke_agent",
+        "gen_ai.system": agent.client.name if hasattr(agent.client, "name") else "openai",
+        "gen_ai.request.model": spec.model,
+        "gen_ai.agent.name": spec.name,
+        "session.id": session_id,
+        "rigging.run_id": run_id,
+        "rigging.resumed": True,
+        "rigging.approval_id": pending.get("approval_id"),
+        "rigging.approver": approver,
+        **_trace_tags(),
+        **_trace_name(),
+    })
+
+    try:
+        messages.extend(_resume_calls(pending, agent, log, run_id, ctx,
+                                      approved=approved, note=note))
+    except _Suspended as suspended:
+        return close_and(_pending_result(log, run_id, suspended.pending))
+
+    try:
+        return _drive(agent=agent, spec=spec, log=log, run_id=run_id, ctx=ctx,
+                      messages=messages, usage=log.usage(run_id),
+                      started=time.perf_counter(), first_step=_model_steps(log, run_id) + 1,
+                      stream=stream, root=root, used_tools=used_tools,
+                      finish=finish, close_and=close_and)
+    except _Suspended as suspended:
+        return close_and(_pending_result(log, run_id, suspended.pending))
+
+
+def _last_model_calls(log: EventLog, run_id: str) -> list[ToolCall]:
+    """The tool calls of the last model response — what a suspended run stopped in."""
+    calls: list[ToolCall] = []
+    for ev in log.events(run_id, type_="model_response"):
+        if ev["payload"].get("final_answer"):
+            continue
+        calls = [ToolCall(**c) for c in ev["payload"].get("tool_calls", [])]
+    return calls
+
+
+def _resume_calls(pending: dict[str, Any], agent: Assembled, log: EventLog, run_id: str,
+                  ctx: RunContext, *, approved: bool, note: str) -> list[Message]:
+    """Finish the interrupted batch: the approved call, then any sibling call.
+
+    Calls that already produced a `tool_result` are skipped, which is the whole
+    of "prior tools are not re-executed": the log decides, not the caller.
+    """
+    tools = agent.tool_map()
+    answered = {ev["payload"].get("call_id") for ev in log.events(run_id, type_="tool_result")}
+    out: list[Message] = []
+    for call in _last_model_calls(log, run_id):
+        if call.id in answered:
+            continue
+        if call.id == pending.get("call_id"):
+            out.append(_execute_resumed_call(call, tools, agent, log, run_id, ctx,
+                                             approved=approved, note=note))
+        else:
+            out.append(_execute_call(call, tools, agent, log, run_id, ctx))
+    return out
+
+
+def _execute_resumed_call(call: ToolCall, tools: dict[str, Any], agent: Assembled,
+                          log: EventLog, run_id: str, ctx: RunContext, *,
+                          approved: bool, note: str) -> Message:
+    """Run the call the approval was for, without preparing it a second time.
+
+    `on_tool_call` runs again on purpose: the post-transform arguments are not in
+    the log (ADR-0025), so this is how resume recovers what the loop was about to
+    execute. The verdict is marked `resumed` and carries the same call id, so the
+    log reads as one decision made twice by the same chain.
+    """
+    tool = tools.get(call.name)
+    span = _span(agent, "execute_tool", {
+        "langfuse.observation.type": "tool",
+        "gen_ai.operation.name": "execute_tool",
+        "gen_ai.tool.name": call.name,
+        "rigging.tool.side_effecting": bool(getattr(tool, "side_effecting", False)),
+        "rigging.resumed": True,
+        **_content(agent.spec, input_value=call.arguments),
+    })
+    job = _CallJob(call=call, tool=tool, span=span)
+    if tool is None:
+        return _finish_call(job, ToolResult.error(
+            call, f"unknown tool {call.name!r}; available: {', '.join(sorted(tools))}"),
+            agent, log, run_id)
+
+    verdict, notes = _apply("on_tool_call", agent.guardrails["on_tool_call"], call, tool)
+    if isinstance(verdict, Transform):
+        job.call = call = verdict.value
+    log.append(run_id, "guardrail_verdict", {"hook": "on_tool_call", "tool": call.name,
+                                             "checks": notes, "resumed": True})
+
+    if isinstance(verdict, Deny):
+        result = ToolResult.error(call, f"denied by guardrail: {verdict.reason}",
+                                  denied=True)
+    elif not approved:
+        result = ToolResult.error(
+            call, f"denied by approval policy: {note or 'denied'}", denied=True)
+    else:
+        result = _run_tool(tool, call, ctx)
+    return _finish_call(job, result, agent, log, run_id)

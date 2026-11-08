@@ -111,7 +111,8 @@
           "enum": [
             "cli",
             "scripted",
-            "auto_deny"
+            "auto_deny",
+            "deferred"
           ],
           "default": "auto_deny"
         },
