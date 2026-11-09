@@ -1,0 +1,55 @@
+name: eval-gate
+
+on:
+  pull_request:
+    paths:
+      - "rigging/**"
+      - "examples/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "Makefile"
+  push:
+    branches: [main]
+    paths:
+      - "rigging/**"
+      - "examples/**"
+      - "tests/**"
+      - "pyproject.toml"
+      - "Makefile"
+
+env:
+  RIGGING_PROFILE_OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: make install
+
+      - name: Seed demo DB
+        run: make seed
+
+      - name: Eval suite
+        run: make eval
+
+      - name: Unit tests
+        run: pytest -x -q
+
+      - name: Upload eval results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-results-${{ github.run_id }}
+          path: results/
+          if-no-files-found: ignore
