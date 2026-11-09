@@ -1,4 +1,7 @@
 name: eval-gate
+permissions:
+  contents: read
+  pull-requests: write
 
 on:
   pull_request:
